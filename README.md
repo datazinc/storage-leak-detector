@@ -278,11 +278,13 @@ cd frontend && npx tsc --noEmit
 
 | Method                                 | Use case                                                            |
 | -------------------------------------- | ------------------------------------------------------------------- |
-| `pip install sldd[web]`                | Standard install from PyPI                                          |
+| `pip install sldd[web]`                | Standard install from PyPI (frontend bundled)                       |
 | `pip install sldd`                     | CLI only (no web dashboard)                                         |
 | Source + `pip install -e ".[dev,web]"` | Development, contributions                                          |
 | PyInstaller / Nuitka                   | Standalone executable (no Python/Node required) — build scripts TBD |
 | Docker                                 | Isolated environment — Dockerfile TBD                               |
+
+**Publishing a release:** Run `cd frontend && npm run build`, then `python scripts/prepare_build.py` to copy the built frontend into the package, then `python -m build`.
 
 ## License
 

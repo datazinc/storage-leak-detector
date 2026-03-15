@@ -30,7 +30,18 @@ _api: SLDD | None = None
 _watcher: _WatchController | None = None
 _io_watcher: _IOWatchController | None = None
 
-FRONTEND_DIR = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
+
+def _frontend_dir() -> Path:
+    """Frontend dist path: package-bundled (PyPI) or source tree (dev)."""
+    # Installed package: sldd/web/ next to this file
+    pkg_web = Path(__file__).resolve().parent / "web"
+    if (pkg_web / "index.html").is_file():
+        return pkg_web
+    # Source/dev: project_root/frontend/dist
+    return Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
+
+
+FRONTEND_DIR = _frontend_dir()
 
 
 class _IOWatchController:

@@ -583,6 +583,12 @@ def _ensure_frontend_built() -> None:
     import subprocess
     from pathlib import Path
 
+    # Installed package: frontend is bundled in sldd/web/, nothing to build
+    pkg_web = Path(__file__).resolve().parent / "web"
+    if (pkg_web / "index.html").is_file():
+        return
+
+    # Source/dev: check frontend/ directory
     frontend_dir = Path(__file__).resolve().parent.parent.parent / "frontend"
     dist_dir = frontend_dir / "dist"
     index_html = dist_dir / "index.html"
