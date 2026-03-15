@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useLocation } from "react-router-dom";
 import { AlertTriangle, Trash2, Eye, History, ShieldOff, Loader2 } from "lucide-react";
 import {
   api,
@@ -8,7 +9,9 @@ import {
   type DeletionLog,
 } from "../api";
 import { Card } from "../components/Card";
+import { DeleteConfirmModal } from "../components/DeleteConfirmModal";
 import { toast } from "../components/Toast";
+import { useAddToDeletion } from "../context/AddToDeletionContext";
 
 type Tab = "files" | "snapshots" | "audit";
 
@@ -50,9 +53,25 @@ export function Deletion() {
 }
 
 function FileDeleteTab() {
+  const addToDeletion = useAddToDeletion();
+  const location = useLocation();
   const [paths, setPaths] = useState("");
+
+  const consumePending = addToDeletion?.consumePending;
+  useEffect(() => {
+    if (location.pathname !== "/deletion" || !consumePending) return;
+    const pending = consumePending();
+    if (pending.length > 0) {
+      setPaths((prev) => {
+        const existing = prev.split("\n").map((p) => p.trim()).filter(Boolean);
+        const merged = [...new Set([...existing, ...pending])];
+        return merged.join("\n");
+      });
+      toast({ type: "info", text: `Added ${pending.length} path(s) from Dashboard` });
+    }
+  }, [location.pathname, consumePending]);
   const [preview, setPreview] = useState<PreviewT | null>(null);
-  const [confirm, setConfirm] = useState("");
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [result, setResult] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [forceMode, setForceMode] = useState(false);
@@ -77,15 +96,18 @@ function FileDeleteTab() {
   };
 
   const doDelete = async () => {
-    if (confirm !== "DELETE") return;
     setLoading(true);
     try {
       const r = await api.deleteExecute(pathList, false, forceMode);
       setResult(r);
       setPreview(null);
-      setConfirm("");
+      setDeleteModalOpen(false);
       setForceMode(false);
-      toast({ type: "success", text: `Deleted ${r.succeeded.length} items` });
+      if (r.succeeded.length > 0) {
+        toast({ type: "success", text: `Deleted ${r.succeeded.length} items` });
+      } else {
+        toast({ type: "info", text: "No items were deleted" });
+      }
     } catch (err: any) {
       toast({ type: "error", text: `Delete failed: ${err?.message ?? err}` });
     } finally {
@@ -196,31 +218,33 @@ function FileDeleteTab() {
             </tbody>
           </table>
 
-          <div className="flex items-center gap-3 p-3 bg-slate-800 rounded-lg">
+          <div className="flex items-center justify-between p-3 bg-slate-800 rounded-lg">
             <p className="text-sm text-slate-300">
               Total: <strong>{formatBytesAbs(preview.total_bytes)}</strong>{" "}
               across <strong>{preview.total_files}</strong> files.
             </p>
-            <div className="ml-auto flex items-center gap-2">
-              <input
-                type="text"
-                placeholder='Type "DELETE" to confirm'
-                value={confirm}
-                onChange={(e) => setConfirm(e.target.value)}
-                className="bg-slate-900 border border-slate-700 rounded px-3 py-1.5 text-sm text-white w-48"
-              />
-              <button
-                onClick={doDelete}
-                disabled={confirm !== "DELETE" || loading}
-                className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-500 disabled:opacity-50 rounded-lg text-sm text-white font-medium transition-colors"
-              >
-                <Trash2 size={14} />
-                Delete
-              </button>
-            </div>
+            <button
+              onClick={() => setDeleteModalOpen(true)}
+              disabled={loading}
+              className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-500 disabled:opacity-50 rounded-lg text-sm text-white font-medium transition-colors"
+            >
+              <Trash2 size={14} />
+              Delete
+            </button>
           </div>
         </Card>
       )}
+
+      <DeleteConfirmModal
+        open={deleteModalOpen}
+        onClose={() => setDeleteModalOpen(false)}
+        onConfirm={doDelete}
+        paths={pathList}
+        totalFiles={preview?.total_files ?? 0}
+        totalBytes={preview?.total_bytes ?? 0}
+        confirmLabel="Delete permanently"
+        loading={loading}
+      />
 
       {result && (
         <Card>
@@ -381,11 +405,18 @@ function SnapshotDeleteTab() {
 
 function AuditTab() {
   const [logs, setLogs] = useState<DeletionLog[]>([]);
+  const [loading, setLoading] = useState(true);
 
   const load = useCallback(() => {
-    api.deletionHistory().then(setLogs).catch((err) =>
-      toast({ type: "error", text: `Audit log failed: ${err?.message ?? err}` }),
-    );
+    setLoading(true);
+    api
+      .deletionHistory(200)
+      .then(setLogs)
+      .catch((err) => {
+        toast({ type: "error", text: `Audit log failed: ${err?.message ?? err}` });
+        setLogs([]);
+      })
+      .finally(() => setLoading(false));
   }, []);
 
   useEffect(() => {
@@ -399,12 +430,24 @@ function AuditTab() {
 
   return (
     <Card>
-      <h3 className="text-sm font-semibold text-white mb-3">
-        Deletion Audit Log
-      </h3>
-      {logs.length === 0 ? (
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-sm font-semibold text-white">
+          Deletion Audit Log
+        </h3>
+        <button
+          onClick={load}
+          disabled={loading}
+          className="flex items-center gap-1.5 px-2 py-1 text-xs text-slate-400 hover:text-white hover:bg-slate-800 disabled:opacity-50 rounded transition-colors"
+        >
+          <History size={12} className={loading ? "animate-spin" : ""} />
+          Refresh
+        </button>
+      </div>
+      {loading ? (
+        <p className="text-slate-500 text-sm py-8 text-center">Loading…</p>
+      ) : logs.length === 0 ? (
         <p className="text-slate-500 text-sm py-8 text-center">
-          No deletions recorded yet.
+          No deletions recorded yet. Deletions from this app are logged here.
         </p>
       ) : (
         <table className="w-full text-sm">

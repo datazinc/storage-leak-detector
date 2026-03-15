@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
-import { AlertTriangle, CheckCircle, XCircle, X, WifiOff } from "lucide-react";
+import { AlertTriangle, CheckCircle, XCircle, X, WifiOff, Info } from "lucide-react";
 
 export interface ToastMessage {
   id: string;
@@ -77,6 +77,84 @@ export function ConnectionBanner({ connected }: { connected: boolean }) {
     <div className="bg-red-900/60 border-b border-red-800 px-4 py-2 flex items-center gap-2 text-red-200 text-sm">
       <WifiOff size={14} />
       <span>Backend unavailable — retrying automatically...</span>
+    </div>
+  );
+}
+
+export function AdminBanner({
+  runningAsRoot,
+  canRestart,
+  onRestartAsUser,
+  restarting,
+}: {
+  runningAsRoot: boolean;
+  canRestart: boolean;
+  onRestartAsUser: () => void;
+  restarting: boolean;
+}) {
+  if (!runningAsRoot) return null;
+  return (
+    <div className="w-full bg-amber-900/80 border-b border-amber-700 px-4 py-2.5 flex items-center justify-center gap-3 text-amber-200 text-sm flex-wrap">
+      <AlertTriangle size={16} className="shrink-0" />
+      <span className="font-medium">
+        Running with administrator/root privileges — be careful. Deletions and scans can affect system files. For basic usage, run as a regular user.
+      </span>
+      {canRestart && (
+        <button
+          onClick={onRestartAsUser}
+          disabled={restarting}
+          className="shrink-0 px-3 py-1.5 rounded-lg bg-amber-700/80 hover:bg-amber-600/80 disabled:opacity-50 text-amber-100 font-medium text-xs transition-colors"
+        >
+          {restarting ? "Restarting…" : "Run as regular user"}
+        </button>
+      )}
+    </div>
+  );
+}
+
+export function AdminSuggestionBanner({
+  runningAsRoot,
+  closed,
+  onClose,
+  canRestartAsAdmin,
+  onRestartAsAdmin,
+  restartingAsAdmin,
+}: {
+  runningAsRoot: boolean;
+  closed: boolean;
+  onClose: () => void;
+  canRestartAsAdmin?: boolean;
+  onRestartAsAdmin?: () => void;
+  restartingAsAdmin?: boolean;
+}) {
+  if (runningAsRoot || closed) return null;
+  return (
+    <div className="w-full bg-blue-900/60 border-b border-blue-800 px-4 py-2.5 flex items-center justify-between gap-3 text-blue-200 text-sm flex-wrap">
+      <div className="flex items-center gap-2 min-w-0 flex-1">
+        <Info size={16} className="shrink-0" />
+        <span>
+          Run with administrator privileges to inspect processes owned by other users and access
+          system paths — more insightful for tracking leaks.
+        </span>
+      </div>
+      <div className="flex items-center gap-2 shrink-0">
+        {canRestartAsAdmin && onRestartAsAdmin && (
+          <button
+            onClick={onRestartAsAdmin}
+            disabled={restartingAsAdmin}
+            className="px-3 py-1.5 rounded-lg bg-blue-700/80 hover:bg-blue-600/80 disabled:opacity-50 text-blue-100 font-medium text-xs transition-colors"
+          >
+            {restartingAsAdmin ? "Restarting…" : "Run as administrator"}
+          </button>
+        )}
+        <button
+          onClick={onClose}
+          className="p-1 rounded hover:bg-blue-800/50 opacity-70 hover:opacity-100 transition-opacity"
+          aria-label="Dismiss"
+        >
+          <X size={14} />
+        </button>
+      </div>
     </div>
   );
 }

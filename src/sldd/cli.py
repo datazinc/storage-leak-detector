@@ -375,9 +375,95 @@ def web(
         )
         sys.exit(1)
 
+    import shutil
+    import signal
+    import socket
     import os
     import subprocess
     import time
+
+    def _port_in_use(h: str, p: int) -> bool:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind((h, p))
+                return False
+            except OSError:
+                return True
+
+    def _kill_our_process_on_port(p: int) -> bool:
+        """Kill process on port if it's sldd/uvicorn. Return True if killed."""
+        if sys.platform == "win32":
+            try:
+                import psutil
+                killed = False
+                for conn in psutil.net_connections(kind="inet"):
+                    if conn.laddr and conn.laddr.port == p and conn.pid:
+                        try:
+                            proc = psutil.Process(conn.pid)
+                            name = (proc.name() or "").lower()
+                            cmdline = " ".join(proc.cmdline() or []).lower()
+                            if "sldd" in name or "sldd" in cmdline or "uvicorn" in name or "uvicorn" in cmdline:
+                                proc.kill()
+                                killed = True
+                                break
+                        except (psutil.NoSuchProcess, psutil.AccessDenied):
+                            continue
+                if killed:
+                    time.sleep(1.0)
+                return killed
+            except Exception:
+                return False
+        lsof_cmd = shutil.which("lsof") or "/usr/sbin/lsof"
+        try:
+            out = subprocess.run(
+                [lsof_cmd, "-i", f":{p}", "-t"],
+                capture_output=True, text=True, timeout=5, env=os.environ,
+            )
+            raw = (out.stdout or "").strip() or (out.stderr or "").strip()
+            if not raw:
+                return False
+            pids = list(dict.fromkeys(x.strip() for x in raw.split() if x.strip()))
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            return False
+        killed = False
+        for pid_s in pids:
+            try:
+                pid = int(pid_s)
+                for ps_arg in ("args=", "command="):
+                    cmd = subprocess.run(
+                        ["ps", "-p", str(pid), "-o", ps_arg],
+                        capture_output=True, text=True, timeout=2,
+                    )
+                    if cmd.returncode != 0:
+                        continue
+                    args = (cmd.stdout or "").lower()
+                    if "sldd" in args or "uvicorn" in args:
+                        os.kill(pid, signal.SIGKILL)
+                        killed = True
+                        break
+                if killed:
+                    break
+            except (ValueError, ProcessLookupError, PermissionError):
+                continue
+        if killed:
+            time.sleep(1.0)
+        return killed
+
+    def _find_available_port(h: str, start: int, max_tries: int = 20) -> int:
+        for i in range(max_tries):
+            p = start + i
+            if not _port_in_use(h, p):
+                return p
+        return start
+
+    if _port_in_use(host, port):
+        if _kill_our_process_on_port(port):
+            console.print(f"[dim]Killed previous sldd on port {port}, starting...[/dim]")
+    if _port_in_use(host, port):
+        preferred = port
+        port = _find_available_port(host, port)
+        if port != preferred:
+            console.print(f"[dim]Port {preferred} in use, using {port}[/dim]")
 
     if build:
         _ensure_frontend_built()
@@ -410,14 +496,18 @@ def web(
         )
         return
 
-    restarts = 0
-    while restarts < max_restarts:
-        console.print(
-            f"[bold]Starting web dashboard[/bold] at {url}"
-            + (f" [dim](restart #{restarts})[/dim]" if restarts else "")
-        )
-        _maybe_open_browser()
-        proc = subprocess.run(
+    def _run_server() -> subprocess.Popen:
+        kwargs: dict = {
+            "env": {
+                **os.environ,
+                "SLDD_DB_PATH": db,
+                "SLDD_SCAN_ROOT": root,
+                "PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION": "python",
+            },
+        }
+        if sys.platform == "win32":
+            kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+        return subprocess.Popen(
             [
                 sys.executable, "-m", "uvicorn",
                 "sldd.server:app_factory",
@@ -427,27 +517,64 @@ def web(
                 "--http", "h11",
                 "--factory",
             ],
-            env={
-                **os.environ,
-                "SLDD_DB_PATH": db,
-                "SLDD_SCAN_ROOT": root,
-                "PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION": "python",
-            },
+            **kwargs,
         )
-        if proc.returncode == 0:
-            break
-        restarts += 1
-        if restarts < max_restarts:
+
+    proc: subprocess.Popen | None = None
+
+    def _kill_child(_signum=None, _frame=None):
+        nonlocal proc
+        if proc is not None and proc.poll() is None:
+            proc.kill()  # SIGKILL for immediate exit, no graceful shutdown
+            try:
+                proc.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                pass
+        if _signum is not None:
+            sys.exit(128 + (_signum or 0))
+
+    restarts = 0
+    try:
+        while restarts < max_restarts:
             console.print(
-                f"[yellow]Server exited with code {proc.returncode}. "
-                f"Restarting in 2s... ({restarts}/{max_restarts})[/yellow]"
+                f"[bold]Starting web dashboard[/bold] at {url}"
+                + (f" [dim](restart #{restarts})[/dim]" if restarts else "")
             )
-            time.sleep(2)
-        else:
-            console.print(
-                f"[red]Server crashed {max_restarts} times. Giving up.[/red]"
-            )
-            sys.exit(1)
+            _maybe_open_browser()
+            proc = _run_server()
+            if sys.platform == "win32":
+                import ctypes
+                from ctypes import wintypes
+                # Keep handler ref so it's not GC'd
+                def _win_ctrl_handler(dw_ctrl_type: int) -> bool:
+                    if dw_ctrl_type in (0, 1):  # CTRL_C_EVENT, CTRL_BREAK_EVENT
+                        _kill_child()
+                        sys.exit(130)
+                    return False
+
+                _win_handler = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.DWORD)(_win_ctrl_handler)
+                ctypes.windll.kernel32.SetConsoleCtrlHandler(_win_handler, True)
+            else:
+                signal.signal(signal.SIGINT, _kill_child)
+                signal.signal(signal.SIGTERM, _kill_child)
+            proc.wait()
+            if proc.returncode == 0:
+                break
+            restarts += 1
+            if restarts < max_restarts:
+                console.print(
+                    f"[yellow]Server exited with code {proc.returncode}. "
+                    f"Restarting in 2s... ({restarts}/{max_restarts})[/yellow]"
+                )
+                time.sleep(2)
+            else:
+                console.print(
+                    f"[red]Server crashed {max_restarts} times. Giving up.[/red]"
+                )
+                sys.exit(1)
+    except KeyboardInterrupt:
+        _kill_child()
+        sys.exit(130)
 
 
 def _ensure_frontend_built() -> None:
@@ -501,6 +628,16 @@ def _ensure_frontend_built() -> None:
         if result.returncode != 0:
             console.print(f"[red]npm install failed:[/red]\n{result.stderr[:500]}")
             return
+
+    # Clear dist before build to avoid Vite ENOTEMPTY (e.g. when switching root/user)
+    if dist_dir.is_dir():
+        try:
+            shutil.rmtree(dist_dir)
+        except OSError as e:
+            console.print(
+                f"[yellow]Could not clear dist/ ({e}). "
+                f"Try: rm -rf frontend/dist[/yellow]"
+            )
 
     console.print(f"[dim]Building frontend ({reason})...[/dim]")
     result = subprocess.run(

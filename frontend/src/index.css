@@ -27,3 +27,35 @@ body {
 .animate-slide-in {
   animation: slide-in 0.2s ease-out;
 }
+
+/* Playback timeline slider - thicker track, visible thumb, tick marks */
+.playback-slider {
+  @apply appearance-none bg-transparent;
+  -webkit-appearance: none;
+  height: 16px;
+}
+.playback-slider::-webkit-slider-runnable-track {
+  @apply h-4 rounded-full bg-slate-800;
+  height: 16px;
+}
+.playback-slider::-webkit-slider-thumb {
+  @apply appearance-none w-4 h-4 rounded-full bg-blue-500 border-2 border-blue-400 shadow-lg cursor-grab active:cursor-grabbing;
+  -webkit-appearance: none;
+  margin-top: 0;
+  transition: box-shadow 0.15s ease;
+}
+.playback-slider::-webkit-slider-thumb:hover {
+  @apply shadow-blue-500/40;
+  box-shadow: 0 0 0 6px rgba(59, 130, 246, 0.2);
+}
+.playback-slider::-moz-range-track {
+  @apply h-4 rounded-full bg-slate-800;
+  height: 16px;
+}
+.playback-slider::-moz-range-thumb {
+  @apply w-4 h-4 rounded-full bg-blue-500 border-2 border-blue-400 shadow-lg cursor-grab;
+  transition: box-shadow 0.15s ease;
+}
+.playback-slider::-moz-range-thumb:hover {
+  box-shadow: 0 0 0 6px rgba(59, 130, 246, 0.2);
+}

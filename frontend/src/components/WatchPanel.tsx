@@ -10,6 +10,8 @@ import {
   Zap,
   FolderSearch,
   Timer,
+  Info,
+  X,
 } from "lucide-react";
 import { api, type WatchStatus, type WatchEvent } from "../api";
 import { toast } from "./Toast";
@@ -47,6 +49,13 @@ export function WatchPanel({ onNewData }: Props) {
   const [events, setEvents] = useState<WatchEvent[]>([]);
   const [interval, setInterval_] = useState(300);
   const [starting, setStarting] = useState(false);
+  const [infoClosed, setInfoClosed] = useState(() => {
+    try {
+      return localStorage.getItem("sldd:watch-info-closed") === "1";
+    } catch {
+      return false;
+    }
+  });
   const lastSeq = useRef(0);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -146,6 +155,20 @@ export function WatchPanel({ onNewData }: Props) {
             <Radio size={14} className="text-slate-600" />
           )}
           <span className="text-sm font-semibold text-white">Watch Mode</span>
+          {infoClosed && (
+            <button
+              onClick={() => {
+                setInfoClosed(false);
+                try {
+                  localStorage.removeItem("sldd:watch-info-closed");
+                } catch { /* noop */ }
+              }}
+              className="p-1 rounded hover:bg-slate-700 text-slate-500 hover:text-slate-300 transition-colors"
+              title="Show explanation"
+            >
+              <Info size={14} />
+            </button>
+          )}
           {isRunning && (
             <span className="text-xs bg-green-500/20 text-green-400 px-2 py-0.5 rounded-full">
               Active
@@ -172,6 +195,30 @@ export function WatchPanel({ onNewData }: Props) {
                 </select>
               </div>
               <button
+                onClick={async () => {
+                  setStarting(true);
+                  try {
+                    const s = await api.watchStart(interval, true);
+                    setStatus(s);
+                    toast({ type: "info", text: "Running one-shot scan…" });
+                  } catch (err: any) {
+                    toast({ type: "error", text: `Run failed: ${err?.message ?? err}` });
+                  } finally {
+                    setStarting(false);
+                  }
+                }}
+                disabled={starting}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-700 hover:bg-slate-600 disabled:opacity-50 rounded-lg text-xs text-white font-medium transition-colors"
+                title="Run a single scan (no repeat)"
+              >
+                {starting ? (
+                  <Loader2 size={12} className="animate-spin" />
+                ) : (
+                  <Zap size={12} />
+                )}
+                Run once
+              </button>
+              <button
                 onClick={doStart}
                 disabled={starting}
                 className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 hover:bg-green-500 disabled:opacity-50 rounded-lg text-xs text-white font-medium transition-colors"
@@ -196,6 +243,37 @@ export function WatchPanel({ onNewData }: Props) {
           )}
         </div>
       </div>
+
+      {/* What it does & when to use */}
+      {!infoClosed && (
+      <div className="mb-4 rounded-lg bg-slate-800/50 border border-slate-700/50">
+          <div className="p-3">
+            <div className="flex items-start gap-2">
+              <Info size={14} className="text-slate-500 shrink-0 mt-0.5" />
+              <div className="flex-1 min-w-0 text-xs text-slate-400 space-y-1">
+                <p className="font-medium text-slate-300">
+                  What it does: Periodically scans your filesystem, compares snapshots, and flags directories growing abnormally.
+                </p>
+                <p>
+                  When to use: Your disk fills up over hours or days and you need to find the culprit. Watch mode runs in the background and surfaces anomalies (e.g. runaway logs, temp files, caches) as they happen. Use <span className="font-mono text-slate-300">Run once</span> for a single scan, or <span className="font-mono text-slate-300">Start Watching</span> for continuous monitoring.
+                </p>
+              </div>
+              <button
+                onClick={() => {
+                  setInfoClosed(true);
+                  try {
+                    localStorage.setItem("sldd:watch-info-closed", "1");
+                  } catch { /* noop */ }
+                }}
+                className="p-1 rounded hover:bg-slate-700 text-slate-500 hover:text-slate-300 transition-colors shrink-0"
+                title="Close"
+              >
+                <X size={14} />
+              </button>
+            </div>
+          </div>
+      </div>
+      )}
 
       {/* Live scan progress */}
       {isRunning && status?.scanning && progress && (

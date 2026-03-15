@@ -3,14 +3,15 @@ import { Activity, Loader2, Clock, AlertTriangle, Copy, FolderOpen, Info } from 
 import { api, formatBytesAbs, type ProcessIOInfo, type PathIOHistoryEntry, type PathIOWatchStatus } from "../api";
 import { ResizableTable } from "./ResizableTable";
 import { toast } from "../components/Toast";
+import { formatChartTime } from "../utils/formatChartTime";
 
 const PATH_INSPECT_COLS = [
+  { key: "actions", label: "", defaultWidth: 44, minWidth: 40 },
   { key: "process", label: "Process", minWidth: 120 },
   { key: "pid", label: "PID", defaultWidth: 60, minWidth: 45, align: "right" as const },
   { key: "read", label: "Read", defaultWidth: 75, minWidth: 55, align: "right" as const },
   { key: "write", label: "Write", defaultWidth: 75, minWidth: 55, align: "right" as const },
   { key: "open", label: "Open", defaultWidth: 55, minWidth: 45, align: "right" as const },
-  { key: "actions", label: "", defaultWidth: 44, minWidth: 40 },
 ];
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
 
@@ -51,6 +52,15 @@ export function PathInspectButton({ path, size = "sm" }: Props) {
   }, [open, load]);
 
   useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open]);
+
+  useEffect(() => {
     if (!open || !watchStatus) return;
     const id = setInterval(() => load(true), 5000);
     return () => clearInterval(id);
@@ -84,12 +94,13 @@ export function PathInspectButton({ path, size = "sm" }: Props) {
     : "px-2 py-1 text-xs rounded bg-blue-600/80 hover:bg-blue-600 text-white transition-colors";
 
   type ChartBucket = { time: string; ts: string; [k: string]: string | number };
+  const timestamps = history?.map((h) => h.timestamp) ?? [];
   const chartBuckets: Record<string, ChartBucket> = history
     ? history
         .filter((h) => h.write_bytes_delta > 0)
         .reduce((acc, h) => {
           const key = h.timestamp.slice(0, 19);
-          if (!acc[key]) acc[key] = { time: new Date(h.timestamp).toLocaleTimeString(), ts: h.timestamp };
+          if (!acc[key]) acc[key] = { time: formatChartTime(h.timestamp, timestamps), ts: h.timestamp };
           const label = `${h.process_name} (${h.pid})`;
           acc[key][label] = ((acc[key][label] as number) || 0) + h.write_bytes_delta;
           return acc;
@@ -192,6 +203,18 @@ export function PathInspectButton({ path, size = "sm" }: Props) {
                         <ResizableTable columns={PATH_INSPECT_COLS}>
                           {processes.map((p, idx) => (
                             <tr key={p.pid} className="border-t border-slate-800">
+                              <td className="py-1.5 pr-2">
+                                <button
+                                  onClick={() => {
+                                    navigator.clipboard.writeText(String(p.pid));
+                                    toast({ type: "success", text: "PID copied" });
+                                  }}
+                                  className="p-1 rounded hover:bg-slate-700 text-slate-500 hover:text-slate-300 transition-colors"
+                                  title="Copy PID"
+                                >
+                                  <Copy size={12} />
+                                </button>
+                              </td>
                               <td className="py-2 pr-2">
                                 <div className="flex items-center gap-2 min-w-0">
                                   {idx === 0 && p.write_bytes > 0 && (
@@ -222,18 +245,6 @@ export function PathInspectButton({ path, size = "sm" }: Props) {
                                 {formatBytesAbs(p.write_bytes)}
                               </td>
                               <td className="py-2 pr-2 text-right text-slate-500">{p.open_files_under_path}</td>
-                              <td className="py-1.5 pl-2">
-                                <button
-                                  onClick={() => {
-                                    navigator.clipboard.writeText(String(p.pid));
-                                    toast({ type: "success", text: "PID copied" });
-                                  }}
-                                  className="p-1 rounded hover:bg-slate-700 text-slate-500 hover:text-slate-300 transition-colors"
-                                  title="Copy PID"
-                                >
-                                  <Copy size={12} />
-                                </button>
-                              </td>
                             </tr>
                           ))}
                         </ResizableTable>

@@ -13,18 +13,50 @@ Cross-platform tool that finds what's eating your disk space by taking filesyste
 - **Safe deletion** — preview impact before deleting, blocklist protects system paths, full audit log
 - **Playback** — animate filesystem changes over time like a video, with speed controls
 
+## Prerequisites
+
+- **Python 3.10+**
+- **Node.js 18+** (only for the web dashboard; CLI works without it)
+
 ## Installation
 
-```bash
-# Clone and install
-git clone <repo-url> && cd storage-leaks-diff-detector
-pip install -e ".[dev,web]"
+**From source**:
 
-# Verify
+```bash
+git clone <repo-url> && cd storage-leaks-diff-detector
+pip install ".[web]"
+```
+
+For development (tests, lint):
+
+```bash
+pip install -e ".[dev,web]"
+```
+
+**From PyPI** (when published): `pip install sldd[web]`
+
+Verify:
+
+```bash
 sldd --help
 ```
 
-Requires Python 3.10+ and Node.js 18+ (for the web UI).
+## Platform support
+
+| Feature | Linux | macOS | Windows |
+|---------|:-----:|:-----:|:-------:|
+| Snapshot, diff, watch, drill, history | ✓ | ✓ | ✓ |
+| Duplicate file detection | ✓ | ✓ | ✓ |
+| Web dashboard | ✓ | ✓ | ✓ |
+| Open in file manager | ✓ (xdg-open) | ✓ (Finder) | ✓ (Explorer) |
+| Process I/O (open files, read/write bytes) | ✓ | Partial (I/O bytes often 0) | ✓ |
+| Port fallback when in use | ✓ | ✓ | ✓ |
+| Kill previous sldd on port before start | ✓ (lsof) | ✓ (lsof) | ✓ (psutil) |
+| Graceful SIGINT/SIGTERM (kill child on Ctrl-C) | ✓ | ✓ | ✓ |
+| Run as root detection | ✓ | ✓ | ✓ |
+| Restart as regular user (sudo → drop privileges) | ✓ | ✓ | — |
+| Restart as administrator (elevate when not admin) | ✓ (pkexec) | ✓ (osascript) | ✓ (UAC) |
+| Symlink following | ✓ | ✓ | Partial (may need admin) |
 
 ## Quick Start
 
@@ -34,11 +66,14 @@ Requires Python 3.10+ and Node.js 18+ (for the web UI).
 sldd web
 ```
 
-That's it. This will:
+First run will:
+
 1. Install frontend dependencies if needed (`npm install`)
 2. Build the frontend if missing or stale (`npm run build`)
 3. Start the server on http://localhost:8080
 4. Open your browser automatically
+
+If Node.js is not installed, you'll see instructions to install it. The CLI (snapshot, diff, watch) works without Node.
 
 ### Watch mode (CLI)
 
@@ -94,18 +129,18 @@ sldd diff --json --db snapshots.db
 
 ## CLI Reference
 
-| Command | Description |
-|---|---|
-| `sldd snapshot` | Take a filesystem snapshot |
-| `sldd diff` | Compare two snapshots and show what grew |
-| `sldd watch` | Periodic snapshots with anomaly alerts |
-| `sldd web` | Launch the web dashboard |
-| `sldd ls` | List saved snapshots |
-| `sldd drill -p /path` | Drill into a directory's children |
-| `sldd history -p /path` | Size history of a path across snapshots |
-| `sldd compact` | Run compaction (collapse stable subtrees) |
-| `sldd prune -k N` | Keep only the N most recent snapshots |
-| `sldd rm <id>` | Delete a specific snapshot |
+| Command                 | Description                               |
+| ----------------------- | ----------------------------------------- |
+| `sldd snapshot`         | Take a filesystem snapshot                |
+| `sldd diff`             | Compare two snapshots and show what grew  |
+| `sldd watch`            | Periodic snapshots with anomaly alerts    |
+| `sldd web`              | Launch the web dashboard                  |
+| `sldd ls`               | List saved snapshots                      |
+| `sldd drill -p /path`   | Drill into a directory's children         |
+| `sldd history -p /path` | Size history of a path across snapshots   |
+| `sldd compact`          | Run compaction (collapse stable subtrees) |
+| `sldd prune -k N`       | Keep only the N most recent snapshots     |
+| `sldd rm <id>`          | Delete a specific snapshot                |
 
 ### Watch mode options
 
@@ -138,13 +173,13 @@ sldd web \
 
 The default `auto` mode dramatically reduces storage usage by scanning smart:
 
-| Phase | What happens | Storage cost |
-|---|---|---|
-| Discovery (scan 0) | Scans at depth 3 (~20K entries) | ~6 MB/snapshot |
-| Tracking (scans 1-2) | Compares snapshots, identifies growers | ~6 MB/snapshot |
-| Focused (scan 3+) | Only scans growing paths at full depth, skips stable paths | ~0.5-3 MB/snapshot |
-| Compaction (every 3rd) | Deletes child entries of stable subtrees, prunes old snapshots | Reclaims 50-90% |
-| Rediscovery (every 10th) | Full depth-3 scan to catch new growth | ~6 MB |
+| Phase                    | What happens                                                   | Storage cost       |
+| ------------------------ | -------------------------------------------------------------- | ------------------ |
+| Discovery (scan 0)       | Scans at depth 3 (~20K entries)                                | ~6 MB/snapshot     |
+| Tracking (scans 1-2)     | Compares snapshots, identifies growers                         | ~6 MB/snapshot     |
+| Focused (scan 3+)        | Only scans growing paths at full depth, skips stable paths     | ~0.5-3 MB/snapshot |
+| Compaction (every 3rd)   | Deletes child entries of stable subtrees, prunes old snapshots | Reclaims 50-90%    |
+| Rediscovery (every 10th) | Full depth-3 scan to catch new growth                          | ~6 MB              |
 
 **Comparison**: naive full `/` scans produce ~58 MB per snapshot (705 MB for 7 snapshots). Adaptive mode keeps the DB under ~25 MB across 100+ scans.
 
@@ -193,6 +228,16 @@ mypy src/sldd/
 # Frontend type check
 cd frontend && npx tsc --noEmit
 ```
+
+## Distribution
+
+| Method | Use case |
+|--------|----------|
+| `pip install sldd[web]` | Standard install from PyPI |
+| `pip install sldd` | CLI only (no web dashboard) |
+| Source + `pip install -e ".[dev,web]"` | Development, contributions |
+| PyInstaller / Nuitka | Standalone executable (no Python/Node required) — build scripts TBD |
+| Docker | Isolated environment — Dockerfile TBD |
 
 ## License
 

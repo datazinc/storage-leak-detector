@@ -5,6 +5,9 @@ import {
   Loader2,
   Search,
   Square,
+  CheckSquare,
+  Pause,
+  Play,
   ChevronDown,
   ChevronRight,
   FileIcon,
@@ -20,13 +23,14 @@ import {
 } from "../api";
 import { useScanContext } from "../context/ScanContext";
 import { Card, StatCard } from "../components/Card";
+import { CopyPathButton } from "../components/CopyPathButton";
 import { DeleteConfirmModal } from "../components/DeleteConfirmModal";
 import { PathPicker } from "../components/PathPicker";
 import { ScanProgress } from "../components/ScanProgress";
 import { toast } from "../components/Toast";
 
 export function Duplicates() {
-  const { activeJob, setActiveJob, isOtherScanning } = useScanContext();
+  const { activeJobs, setActiveJob, isScanTypeActive, getActiveJob } = useScanContext();
   const [result, setResult] = useState<DuplicatesResult | null>(null);
   const [scanStatus, setScanStatus] = useState<ScanJobStatus | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -38,6 +42,7 @@ export function Duplicates() {
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(20);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const autoStartedRef = useRef(false);
 
   const stopPolling = useCallback(() => {
     if (pollRef.current) {
@@ -53,7 +58,7 @@ export function Duplicates() {
         setScanStatus(s);
         if (s.done) {
           stopPolling();
-          setActiveJob(null);
+          setActiveJob("duplicates", null);
           if (!s.error) {
             const r = await api.scanResult<DuplicatesResult>(jobId);
             setResult(r);
@@ -69,8 +74,8 @@ export function Duplicates() {
   }, [stopPolling, setActiveJob]);
 
   const scan = useCallback(async () => {
-    if (isOtherScanning("duplicates")) {
-      toast({ type: "warning", text: "Another scan (Biggest Files) is already running. Wait for it to finish." });
+    if (isScanTypeActive("duplicates")) {
+      toast({ type: "warning", text: "Duplicates scan already running." });
       return;
     }
     stopPolling();
@@ -81,30 +86,34 @@ export function Duplicates() {
     try {
       const job = await api.startDuplicatesScan(minSize, depth, scanRoot.trim() || undefined);
       setScanStatus(job);
-      setActiveJob({ type: "duplicates", jobId: job.id });
+      setActiveJob("duplicates", job.id);
       pollJob(job.id);
     } catch (err: any) {
-      setActiveJob(null);
+      setActiveJob("duplicates", null);
       toast({ type: "error", text: `Scan failed: ${err?.message ?? err}` });
     }
-  }, [minSize, depth, scanRoot, stopPolling, isOtherScanning, setActiveJob, pollJob]);
+  }, [minSize, depth, scanRoot, stopPolling, isScanTypeActive, setActiveJob, pollJob]);
 
   useEffect(() => {
-    if (activeJob?.type === "duplicates") {
-      api.scanStatus(activeJob.jobId).then((s) => {
+    const jobId = getActiveJob("duplicates");
+    if (jobId) {
+      api.scanStatus(jobId).then((s) => {
         setScanStatus(s);
-        if (!s.done) pollJob(activeJob.jobId);
+        if (!s.done) pollJob(jobId);
         else {
-          setActiveJob(null);
-          if (!s.error) api.scanResult<DuplicatesResult>(activeJob.jobId).then((r) => {
+          setActiveJob("duplicates", null);
+          if (!s.error) api.scanResult<DuplicatesResult>(jobId).then((r) => {
             setResult(r);
             setExpanded(new Set(r.groups.slice(0, 5).map((g) => g.hash)));
           });
         }
-      }).catch(() => setActiveJob(null));
+      }).catch(() => setActiveJob("duplicates", null));
+    } else if (result === null && !autoStartedRef.current) {
+      autoStartedRef.current = true;
+      scan();
     }
     return stopPolling;
-  }, [activeJob?.type, activeJob?.jobId, pollJob, setActiveJob, stopPolling]);
+  }, [activeJobs.duplicates, pollJob, setActiveJob, stopPolling, scan, result]);
 
   const toggleExpand = (hash: string) => {
     setExpanded((prev) => {
@@ -140,6 +149,19 @@ export function Duplicates() {
       g.files.slice(1).forEach((f) => next.add(f.path));
     }
     setSelected(next);
+  };
+
+  const selectPageGroups = () => {
+    if (!result) return;
+    const start = page * pageSize;
+    const pageGroups = result.groups.slice(start, start + pageSize);
+    setSelected((prev) => {
+      const next = new Set(prev);
+      for (const g of pageGroups) {
+        g.files.slice(1).forEach((f) => next.add(f.path));
+      }
+      return next;
+    });
   };
 
   const deselectAll = () => setSelected(new Set());
@@ -201,7 +223,32 @@ export function Duplicates() {
     await executeDelete(deletePreview.paths, false);
   };
 
-  const isScanning = scanStatus != null && !scanStatus.done;
+  const deleteGroupDuplicates = async (group: DuplicateGroup) => {
+    const paths = group.files.slice(1).map((f) => f.path);
+    if (paths.length === 0) return;
+    setDeleting(true);
+    try {
+      const preview = await api.deletePreview(paths);
+      if (preview.blocked_paths.length > 0) {
+        setBlockedPaths(preview.blocked_paths);
+        setPendingDeletePaths(paths);
+        setDeleting(false);
+        return;
+      }
+      setDeletePreview({
+        paths,
+        totalFiles: preview.total_files,
+        totalBytes: preview.total_bytes,
+      });
+      setDeleteModalOpen(true);
+    } catch (err: any) {
+      toast({ type: "error", text: `Preview failed: ${err?.message ?? err}` });
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const scanInProgress = scanStatus != null && !scanStatus.done;
 
   const selectedBytes = result
     ? result.groups.flatMap((g) => g.files)
@@ -261,22 +308,51 @@ export function Duplicates() {
               <option value={15}>15</option>
             </select>
           </div>
+          {result && result.groups.length > 0 && !scanInProgress && (
+            <button
+              onClick={selectAllGroups}
+              title="Select all duplicate copies (keeps one original per group)"
+              className="flex items-center gap-2 px-4 py-2 text-sm bg-slate-700 hover:bg-slate-600 rounded-lg text-white font-medium transition-colors"
+            >
+              <CheckSquare size={14} />
+              Select all duplicates
+            </button>
+          )}
           <button
             onClick={scan}
-            disabled={isScanning}
+            disabled={scanInProgress}
             className="flex items-center gap-2 px-4 py-2 text-sm bg-purple-600 hover:bg-purple-500 disabled:opacity-50 rounded-lg text-white font-medium transition-colors"
           >
-            {isScanning ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />}
-            {isScanning ? "Scanning..." : "Find Duplicates"}
+            {scanInProgress ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />}
+            {scanInProgress ? "Scanning..." : "Find Duplicates"}
           </button>
-          {isScanning && scanStatus?.id && (
-            <button
-              onClick={() => api.scanStop(scanStatus.id)}
-              className="flex items-center gap-2 px-4 py-2 text-sm bg-red-600 hover:bg-red-500 rounded-lg text-white font-medium transition-colors"
-            >
-              <Square size={14} />
-              Stop
-            </button>
+          {scanInProgress && scanStatus?.id && (
+            <>
+              {scanStatus.paused ? (
+                <button
+                  onClick={() => api.scanResume(scanStatus.id).then(setScanStatus)}
+                  className="flex items-center gap-2 px-4 py-2 text-sm bg-emerald-600 hover:bg-emerald-500 rounded-lg text-white font-medium transition-colors"
+                >
+                  <Play size={14} />
+                  Resume
+                </button>
+              ) : (
+                <button
+                  onClick={() => api.scanPause(scanStatus.id).then(setScanStatus)}
+                  className="flex items-center gap-2 px-4 py-2 text-sm bg-amber-600 hover:bg-amber-500 rounded-lg text-white font-medium transition-colors"
+                >
+                  <Pause size={14} />
+                  Pause
+                </button>
+              )}
+              <button
+                onClick={() => api.scanStop(scanStatus.id)}
+                className="flex items-center gap-2 px-4 py-2 text-sm bg-red-600 hover:bg-red-500 rounded-lg text-white font-medium transition-colors"
+              >
+                <Square size={14} />
+                Stop
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -382,12 +458,22 @@ export function Duplicates() {
         return (
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <div className="flex items-center gap-3 text-xs">
-            <button
-              onClick={selectAllGroups}
-              className="text-purple-400 hover:text-purple-300 transition-colors"
-            >
-              Select all duplicates (keep one per group)
-            </button>
+            {!scanInProgress && (
+              <>
+                <button
+                  onClick={selectAllGroups}
+                  className="text-purple-400 hover:text-purple-300 transition-colors"
+                >
+                  Select all
+                </button>
+                <button
+                  onClick={selectPageGroups}
+                  className="text-slate-500 hover:text-slate-300 transition-colors"
+                >
+                  Select page
+                </button>
+              </>
+            )}
             <span className="text-slate-700">|</span>
             <button
               onClick={() => setExpanded(new Set(result.groups.map((g) => g.hash)))}
@@ -436,7 +522,7 @@ export function Duplicates() {
       })()}
 
       {/* Empty state — no scan yet */}
-      {!result && !isScanning && (
+      {!result && !scanInProgress && (
         <Card className="text-center py-16">
           <div className="max-w-md mx-auto">
             <div className="p-4 rounded-full bg-slate-800 w-fit mx-auto mb-4">
@@ -448,11 +534,11 @@ export function Duplicates() {
             </p>
             <button
               onClick={scan}
-              disabled={isScanning}
+              disabled={scanInProgress}
               className="inline-flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 rounded-lg text-sm text-white font-medium transition-colors"
             >
               <Search size={16} />
-              {isScanning ? "Scanning..." : "Find Duplicates"}
+              {scanInProgress ? "Scanning..." : "Find Duplicates"}
             </button>
           </div>
         </Card>
@@ -476,13 +562,18 @@ export function Duplicates() {
         return (
           <Card key={group.hash} className="!p-0 overflow-hidden">
             {/* Group header */}
-            <button
-              onClick={() => toggleExpand(group.hash)}
-              className="w-full flex items-center justify-between px-4 py-3 hover:bg-slate-800/50 transition-colors"
-            >
-              <div className="flex items-center gap-3">
-                {isOpen ? <ChevronDown size={14} className="text-slate-500" /> : <ChevronRight size={14} className="text-slate-500" />}
-                <span className="text-sm font-medium text-white">
+            <div className="flex items-center justify-between px-4 py-3 hover:bg-slate-800/50 transition-colors gap-3">
+              <button
+                onClick={() => toggleExpand(group.hash)}
+                className="flex-1 flex items-center gap-3 text-left min-w-0"
+              >
+                {isOpen ? <ChevronDown size={14} className="text-slate-500 shrink-0" /> : <ChevronRight size={14} className="text-slate-500 shrink-0" />}
+                {group.files[0]?.name && (
+                  <span className="text-sm text-slate-300 truncate max-w-[200px] sm:max-w-[280px]" title={group.files[0].path}>
+                    {group.files[0].name}
+                  </span>
+                )}
+                <span className="text-sm font-medium text-white shrink-0">
                   {group.count} copies
                 </span>
                 <span className="text-xs text-slate-500 font-mono">
@@ -496,11 +587,21 @@ export function Duplicates() {
                     {groupSelectedCount} selected
                   </span>
                 )}
+              </button>
+              <div className="flex items-center gap-2 shrink-0">
+                <span className="text-[10px] text-slate-600 font-mono hidden sm:inline">
+                  sha256:{group.hash}
+                </span>
+                <button
+                  onClick={(e) => { e.stopPropagation(); deleteGroupDuplicates(group); }}
+                  disabled={deleting || group.count <= 1}
+                  className="flex items-center gap-1.5 px-2 py-1 text-xs bg-red-600/80 hover:bg-red-500 disabled:opacity-50 disabled:cursor-not-allowed rounded text-white font-medium transition-colors"
+                >
+                  <Trash2 size={12} />
+                  Delete duplicates
+                </button>
               </div>
-              <span className="text-[10px] text-slate-600 font-mono">
-                sha256:{group.hash}
-              </span>
-            </button>
+            </div>
 
             {/* Expanded file list */}
             {isOpen && (
@@ -509,12 +610,14 @@ export function Duplicates() {
                   <span className="text-[11px] text-slate-600">
                     First file is the original (kept). Others are duplicates.
                   </span>
-                  <button
-                    onClick={() => selectAllDuplicates(group)}
-                    className="text-[11px] text-purple-400 hover:text-purple-300 transition-colors"
-                  >
-                    Select duplicates
-                  </button>
+                  {!scanInProgress && (
+                    <button
+                      onClick={() => selectAllDuplicates(group)}
+                      className="text-[11px] text-purple-400 hover:text-purple-300 transition-colors"
+                    >
+                      Select duplicates
+                    </button>
+                  )}
                 </div>
                 {group.files.map((f, idx) => {
                   const isOriginal = idx === 0;
@@ -547,6 +650,7 @@ export function Duplicates() {
                       <span className="text-[11px] text-slate-600 font-mono truncate max-w-[300px]" title={f.directory}>
                         {f.directory}
                       </span>
+                      <CopyPathButton path={f.path} className="shrink-0" />
                       {f.mtime && (
                         <span className="text-[11px] text-slate-600 shrink-0">
                           {new Date(f.mtime).toLocaleDateString([], { month: "short", day: "numeric", year: "2-digit" })}
@@ -574,8 +678,9 @@ export function Duplicates() {
         paths={deletePreview?.paths ?? []}
         totalFiles={deletePreview?.totalFiles ?? 0}
         totalBytes={deletePreview?.totalBytes ?? 0}
-        confirmLabel="Delete permanently"
+        confirmLabel="Delete duplicates"
         loading={deleting}
+        keepOnePerGroup={true}
       />
     </div>
   );

@@ -37,6 +37,15 @@ export function DeletePathButton({ path, onDeleted, size = "sm" }: Props) {
     if (open && !preview && !blocked) fetchPreview();
   }, [open, preview, blocked, fetchPreview]);
 
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open]);
+
   const executeDelete = async (force: boolean) => {
     setDeleting(true);
     try {

@@ -61,6 +61,7 @@ export interface Snapshot {
   timestamp: string;
   root_path: string;
   label: string;
+  scan_depth?: number | null;
 }
 
 export interface DirEntry {
@@ -174,6 +175,7 @@ export interface ScanJobStatus {
   files_checked: number;
   detail: string;
   done: boolean;
+  paused?: boolean;
   error: string | null;
   elapsed_seconds: number;
 }
@@ -370,10 +372,14 @@ export const api = {
   diffLatest: () => request<any>("/diff/latest"),
   drill: (snapId: number, path: string) =>
     request<DirEntry[]>(`/drill/${snapId}?path=${encodeURIComponent(path)}`),
-  pathHistory: (path: string, limit = 50) =>
-    request<Array<{ snapshot_id: number; timestamp: string; total_bytes: number; file_count: number }>>(
-      `/history?path=${encodeURIComponent(path)}&limit=${limit}`
-    ),
+  pathHistory: (path: string, limit = 50, scanDepth?: number | null) => {
+    const params = new URLSearchParams({ path, limit: String(limit) });
+    // Pass scan_depth to filter: same depth = comparable; null = legacy/full scans only
+    if (scanDepth !== undefined) params.set("scan_depth", scanDepth === null ? "legacy" : String(scanDepth));
+    return request<Array<{ snapshot_id: number; timestamp: string; total_bytes: number; file_count: number }>>(
+      `/history?${params}`
+    );
+  },
   topDirs: (snapId: number, limit = 20) =>
     request<DirEntry[]>(`/top/${snapId}?limit=${limit}`),
   playbackFrames: (from: number, to: number, topN = 20, pathFilter?: string) => {
@@ -403,6 +409,26 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ settings }),
     }),
+  runningAsRoot: () =>
+    request<{ running_as_root: boolean }>("/running-as-root"),
+  canRestartAsRegularUser: () =>
+    request<{ can_restart: boolean; reason?: string; sudo_user?: string }>(
+      "/can-restart-as-regular-user"
+    ),
+  restartAsRegularUser: () =>
+    request<{ ok: boolean; message: string; port?: number; url?: string }>(
+      "/restart-as-regular-user",
+      { method: "POST" }
+    ),
+  canRestartAsAdministrator: () =>
+    request<{ can_restart: boolean; reason?: string }>(
+      "/can-restart-as-administrator"
+    ),
+  restartAsAdministrator: () =>
+    request<{ ok: boolean; message: string; port?: number; url?: string }>(
+      "/restart-as-administrator",
+      { method: "POST" }
+    ),
   dbInfo: () => request<DbInfo>("/db-info"),
   vacuum: () => request<{ ok: boolean }>("/db/vacuum", { method: "POST" }),
 
@@ -438,6 +464,10 @@ export const api = {
     request<ScanJobStatus>(`/scan/${jobId}/status`),
   scanStop: (jobId: string) =>
     request<ScanJobStatus>(`/scan/${jobId}/stop`, { method: "POST" }),
+  scanPause: (jobId: string) =>
+    request<ScanJobStatus>(`/scan/${jobId}/pause`, { method: "POST" }),
+  scanResume: (jobId: string) =>
+    request<ScanJobStatus>(`/scan/${jobId}/resume`, { method: "POST" }),
   scanResult: <T = any>(jobId: string) =>
     request<T>(`/scan/${jobId}/result`),
 

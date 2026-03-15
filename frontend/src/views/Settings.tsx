@@ -196,7 +196,10 @@ export function SettingsView() {
       </Card>
 
       <Card>
-        <h3 className="text-sm font-semibold text-white mb-4">Watch Mode</h3>
+        <h3 className="text-sm font-semibold text-white mb-1">Watch Mode</h3>
+        <p className="text-xs text-slate-500 mb-4">
+          Background monitoring: scans at the interval below, compares snapshots, and flags abnormal growth. Use when your disk fills up over time and you need to find the culprit.
+        </p>
         <div className="grid grid-cols-2 gap-4">
           <Field
             label="Scan Interval (seconds)"

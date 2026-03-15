@@ -1,5 +1,7 @@
-import { AlertTriangle, Loader2, X } from "lucide-react";
+import { useEffect } from "react";
+import { AlertTriangle, Copy, Loader2, X } from "lucide-react";
 import { formatBytesAbs } from "../api";
+import { toast } from "./Toast";
 
 interface DeleteConfirmModalProps {
   open: boolean;
@@ -10,6 +12,8 @@ interface DeleteConfirmModalProps {
   totalBytes: number;
   confirmLabel?: string;
   loading?: boolean;
+  /** When true, show message that one file is kept per group (duplicate deletion) */
+  keepOnePerGroup?: boolean;
 }
 
 export function DeleteConfirmModal({
@@ -21,7 +25,17 @@ export function DeleteConfirmModal({
   totalBytes,
   confirmLabel = "Delete permanently",
   loading = false,
+  keepOnePerGroup = false,
 }: DeleteConfirmModalProps) {
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+
   if (!open) return null;
 
   const maxPathsShown = 10;
@@ -49,7 +63,9 @@ export function DeleteConfirmModal({
               This action cannot be undone.
             </p>
             <p className="text-xs text-slate-400 mt-1">
-              Files will be permanently removed from disk. There is no recycle bin.
+              {keepOnePerGroup
+                ? "One file will be kept per group. The duplicates below will be permanently removed. There is no recycle bin."
+                : "Files will be permanently removed from disk. There is no recycle bin."}
             </p>
           </div>
 
@@ -68,13 +84,35 @@ export function DeleteConfirmModal({
 
           {paths.length > 0 && (
             <div>
-              <p className="text-xs text-slate-500 mb-2">
-                Paths {hasMore ? `(showing first ${maxPathsShown} of ${paths.length})` : ""}
-              </p>
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-xs text-slate-500">
+                  Paths {hasMore ? `(showing first ${maxPathsShown} of ${paths.length})` : ""}
+                </p>
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(paths.join("\n"));
+                    toast({ type: "success", text: `Copied ${paths.length} path(s)` });
+                  }}
+                  className="flex items-center gap-1.5 px-2 py-1 text-xs text-slate-400 hover:text-white hover:bg-slate-800 rounded transition-colors"
+                >
+                  <Copy size={12} />
+                  Copy all
+                </button>
+              </div>
               <div className="max-h-[160px] overflow-auto rounded border border-slate-800 bg-slate-950/50 p-2 font-mono text-xs text-slate-400 space-y-1">
                 {paths.slice(0, maxPathsShown).map((p) => (
-                  <div key={p} className="truncate" title={p}>
-                    {p}
+                  <div key={p} className="flex items-center gap-2 group">
+                    <span className="truncate flex-1 min-w-0" title={p}>{p}</span>
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(p);
+                        toast({ type: "success", text: "Path copied" });
+                      }}
+                      className="p-1 rounded opacity-60 hover:opacity-100 hover:bg-slate-700 text-slate-500 hover:text-white transition-all shrink-0"
+                      title="Copy path"
+                    >
+                      <Copy size={12} />
+                    </button>
                   </div>
                 ))}
                 {hasMore && (

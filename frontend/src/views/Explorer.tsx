@@ -7,16 +7,18 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from "recharts";
-import { ChevronRight, Folder, FolderOpen, LayoutDashboard, Trash2, Loader2, AlertTriangle, ShieldOff } from "lucide-react";
+import { ChevronRight, Folder, FolderOpen, Info, LayoutDashboard, Trash2, Loader2, AlertTriangle, ShieldOff, X } from "lucide-react";
 import { Link } from "react-router-dom";
 import {
   api,
+  formatBytes,
   formatBytesAbs,
   type DirEntry,
   type Snapshot,
   type DeletePreview as PreviewT,
 } from "../api";
 import { Card } from "../components/Card";
+import { formatChartTime } from "../utils/formatChartTime";
 import { PathInspectButton } from "../components/PathInspectButton";
 import { toast } from "../components/Toast";
 
@@ -31,6 +33,13 @@ export function Explorer() {
   const [deletePreview, setDeletePreview] = useState<PreviewT | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [blockedPaths, setBlockedPaths] = useState<string[]>([]);
+  const [infoClosed, setInfoClosed] = useState(() => {
+    try {
+      return localStorage.getItem("sldd:explorer-info-closed") === "1";
+    } catch {
+      return false;
+    }
+  });
 
   const loadSnapshots = useCallback(() => {
     api.listSnapshots(200).then((s) => {
@@ -59,7 +68,7 @@ export function Explorer() {
     setLoading(true);
     api.drill(snapId, path).then((c) => {
       setChildren(c);
-      setSelected(null);
+      setSelected(c.length > 0 ? c[0] : null);
     }).catch((err) => toast({ type: "error", text: `Drill failed: ${err?.message ?? err}` }))
       .finally(() => setLoading(false));
   }, [snapId, path]);
@@ -69,18 +78,23 @@ export function Explorer() {
       setHistory([]);
       return;
     }
-    api.pathHistory(selected.path, 50).then((h) =>
+    const scanDepth = snapshots.find((s) => s.id === snapId)?.scan_depth;
+    api.pathHistory(selected.path, 50, scanDepth).then((h) => {
+      const reversed = h.reverse();
+      const timestamps = reversed.map((r) => r.timestamp);
       setHistory(
-        h.reverse().map((r) => ({
-          time: new Date(r.timestamp).toLocaleTimeString([], {
-            hour: "2-digit",
-            minute: "2-digit",
-          }),
-          bytes: r.total_bytes,
-        }))
-      )
-    ).catch((err) => toast({ type: "error", text: `History failed: ${err?.message ?? err}` }));
-  }, [selected]);
+        reversed.map((r, i) => {
+          const prev = i > 0 ? reversed[i - 1] : null;
+          const delta = prev != null ? r.total_bytes - prev.total_bytes : undefined;
+          return {
+            time: formatChartTime(r.timestamp, timestamps),
+            bytes: r.total_bytes,
+            delta,
+          };
+        })
+      );
+    }).catch((err) => toast({ type: "error", text: `History failed: ${err?.message ?? err}` }));
+  }, [selected, snapId, snapshots]);
 
   const doDeletePreview = async (path: string) => {
     setDeleting(true);
@@ -168,7 +182,23 @@ export function Explorer() {
   return (
     <div className="p-6 space-y-5 max-w-[1400px] min-w-0">
       <div className="flex items-center justify-between">
-        <h2 className="text-xl font-semibold text-white">Explorer</h2>
+        <div className="flex items-center gap-2">
+          <h2 className="text-xl font-semibold text-white">Explorer</h2>
+          {infoClosed && (
+            <button
+              onClick={() => {
+                setInfoClosed(false);
+                try {
+                  localStorage.removeItem("sldd:explorer-info-closed");
+                } catch { /* noop */ }
+              }}
+              className="p-1 rounded hover:bg-slate-700 text-slate-500 hover:text-slate-300 transition-colors"
+              title="Show explanation"
+            >
+              <Info size={14} />
+            </button>
+          )}
+        </div>
         <select
           className="bg-slate-800 border border-slate-700 rounded px-3 py-2 text-sm text-white min-w-[240px]"
           value={snapId ?? ""}
@@ -186,6 +216,33 @@ export function Explorer() {
           ))}
         </select>
       </div>
+
+      {!infoClosed && (
+        <div className="rounded-lg bg-slate-800/50 border border-slate-700/50">
+          <div className="p-3">
+            <div className="flex items-start gap-2">
+              <Info size={14} className="text-slate-500 shrink-0 mt-0.5" />
+              <div className="flex-1 min-w-0 text-xs text-slate-400">
+                <p className="font-medium text-slate-300">
+                  Historical snapshot view — not live filesystem. Sizes and structure reflect the state when the snapshot was taken.
+                </p>
+              </div>
+              <button
+                onClick={() => {
+                  setInfoClosed(true);
+                  try {
+                    localStorage.setItem("sldd:explorer-info-closed", "1");
+                  } catch { /* noop */ }
+                }}
+                className="p-1 rounded hover:bg-slate-700 text-slate-500 hover:text-slate-300 transition-colors shrink-0"
+                title="Close"
+              >
+                <X size={14} />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="flex items-center gap-1 text-sm text-slate-400 flex-wrap">
         {breadcrumbs.map((b, i) => (
@@ -374,7 +431,27 @@ export function Explorer() {
                           borderRadius: 8,
                           fontSize: 11,
                         }}
-                        formatter={(v: any) => formatBytesAbs(Number(v))}
+                        content={({ active, payload, label }) => {
+                          if (!active || !payload?.length) return null;
+                          const p = payload[0]?.payload as { bytes: number; delta?: number };
+                          const bytes = p?.bytes ?? payload[0]?.value;
+                          const delta = p?.delta;
+                          return (
+                            <div className="px-3 py-2 space-y-1">
+                              <p className="text-slate-300 font-medium">{label}</p>
+                              <p className="font-mono text-white">{formatBytesAbs(Number(bytes))}</p>
+                              {delta !== undefined && (
+                                <p
+                                  className={`font-mono text-xs ${
+                                    delta > 0 ? "text-red-400" : delta < 0 ? "text-emerald-400" : "text-slate-500"
+                                  }`}
+                                >
+                                  Change: {delta > 0 ? "+" : ""}{formatBytes(delta)} vs previous
+                                </p>
+                              )}
+                            </div>
+                          );
+                        }}
                       />
                       <Area
                         type="monotone"

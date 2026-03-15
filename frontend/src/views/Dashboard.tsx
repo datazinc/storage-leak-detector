@@ -14,6 +14,7 @@ import {
   Camera,
   ChevronDown,
   ChevronUp,
+  Plus,
 } from "lucide-react";
 import {
   api,
@@ -24,34 +25,37 @@ import {
   type PathIOOffender,
 } from "../api";
 import { Card, StatCard, SeverityBadge } from "../components/Card";
+import { formatChartTime } from "../utils/formatChartTime";
+import { CopyPathButton } from "../components/CopyPathButton";
 import { DeletePathButton } from "../components/DeletePathButton";
 import { PathInspectButton } from "../components/PathInspectButton";
 import { ResizableTable } from "../components/ResizableTable";
 import { DepthFilter, filterByDepth, type DepthMode } from "../components/DepthFilter";
 import { toast } from "../components/Toast";
 import { WatchPanel } from "../components/WatchPanel";
+import { useAddToDeletion } from "../context/AddToDeletionContext";
 
 const ANOMALY_COLS = [
   { key: "sev", label: "Sev", defaultWidth: 60, minWidth: 50 },
-  { key: "path", label: "Path", minWidth: 120 },
+  { key: "path", label: "Path", defaultWidth: 180, minWidth: 100 },
   { key: "rules", label: "Rules", defaultWidth: 140, minWidth: 80 },
-  { key: "growth", label: "Growth", defaultWidth: 85, minWidth: 65, align: "right" as const },
+  { key: "growth", label: "Change", defaultWidth: 85, minWidth: 65, align: "right" as const },
   { key: "rate", label: "Rate", defaultWidth: 85, minWidth: 65, align: "right" as const },
   { key: "cause", label: "Cause", minWidth: 100 },
-  { key: "offender", label: "Process", defaultWidth: 110, minWidth: 80 },
-  { key: "actions", label: "", defaultWidth: 44, minWidth: 40 },
+  { key: "actions", label: "", defaultWidth: 140, minWidth: 110 },
+  { key: "offender", label: "Process", defaultWidth: 120, minWidth: 90 },
 ];
 
 const GROWER_COLS = [
   { key: "rank", label: "#", defaultWidth: 32, minWidth: 28 },
-  { key: "path", label: "Path", minWidth: 100 },
-  { key: "growth", label: "Growth", defaultWidth: 85, minWidth: 60, align: "right" as const },
+  { key: "path", label: "Path", defaultWidth: 160, minWidth: 80 },
+  { key: "growth", label: "Change", defaultWidth: 85, minWidth: 60, align: "right" as const },
   { key: "rate", label: "Rate/h", defaultWidth: 85, minWidth: 60, align: "right" as const },
   { key: "size", label: "Size", defaultWidth: 85, minWidth: 60, align: "right" as const },
   { key: "pct", label: "%", defaultWidth: 50, minWidth: 40, align: "right" as const },
   { key: "files", label: "Files", defaultWidth: 55, minWidth: 40, align: "right" as const },
-  { key: "offender", label: "Process", defaultWidth: 100, minWidth: 80 },
-  { key: "actions", label: "", defaultWidth: 44, minWidth: 40 },
+  { key: "actions", label: "", defaultWidth: 140, minWidth: 110 },
+  { key: "offender", label: "Process", defaultWidth: 120, minWidth: 90 },
 ];
 
 const RULE_LABELS: Record<string, { label: string; color: string }> = {
@@ -77,6 +81,7 @@ function RuleBadges({ rules }: { rules: string }) {
 }
 
 export function Dashboard() {
+  const addToDeletion = useAddToDeletion();
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
   const [report, setReport] = useState<ReportData | null>(null);
   const [timeline, setTimeline] = useState<any[]>([]);
@@ -144,15 +149,21 @@ export function Dashboard() {
       }
       if (snaps.length > 0) {
         const rootPath = snaps[0].root_path;
-        const hist = await api.pathHistory(rootPath, 100);
+        // Filter to same scan_depth as latest (avoids mixing full vs depth-limited → fake drops)
+        const scanDepth = snaps[0].scan_depth;
+        const hist = await api.pathHistory(rootPath, 100, scanDepth);
+        const reversed = hist.reverse();
+        const timestamps = reversed.map((h) => h.timestamp);
         setTimeline(
-          hist.reverse().map((h) => ({
-            time: new Date(h.timestamp).toLocaleTimeString([], {
-              hour: "2-digit",
-              minute: "2-digit",
-            }),
-            bytes: h.total_bytes,
-          }))
+          reversed.map((h, i) => {
+            const prev = i > 0 ? reversed[i - 1] : null;
+            const delta = prev != null ? h.total_bytes - prev.total_bytes : undefined;
+            return {
+              time: formatChartTime(h.timestamp, timestamps),
+              bytes: h.total_bytes,
+              delta,
+            };
+          })
         );
       }
     } catch (err: any) {
@@ -414,7 +425,21 @@ export function Dashboard() {
                         ? a.attributed_path
                         : "—"}
                     </td>
-                    <td className="py-2 pr-2" title={offenders[a.attributed_path]?.cmdline ?? undefined}>
+                    <td className="py-1.5 pr-2 flex items-center gap-1 shrink-0 whitespace-nowrap">
+                      <CopyPathButton path={a.path} />
+                      <PathInspectButton path={a.path} />
+                      {addToDeletion && (
+                        <button
+                          onClick={() => { addToDeletion.addPath(a.path); toast({ type: "info", text: "Added to Deletion" }); }}
+                          title="Add to Deletion"
+                          className="p-1.5 rounded hover:bg-slate-700 text-slate-500 hover:text-slate-300 transition-colors"
+                        >
+                          <Plus size={12} />
+                        </button>
+                      )}
+                      <DeletePathButton path={a.path} onDeleted={load} />
+                    </td>
+                    <td className="py-2 pl-2 min-w-0 overflow-hidden" title={offenders[a.attributed_path]?.cmdline ?? undefined}>
                       <div className="flex flex-col gap-0.5">
                         {a.sldd_db_bytes && a.sldd_db_bytes > 0 && (
                           <span className="text-xs text-blue-400 font-medium" title="This tool's database contributed to growth">
@@ -432,10 +457,6 @@ export function Dashboard() {
                           <span className="text-slate-600">—</span>
                         ) : null}
                       </div>
-                    </td>
-                    <td className="py-1.5 pl-2 flex items-center gap-1">
-                      <PathInspectButton path={a.path} />
-                      <DeletePathButton path={a.path} onDeleted={load} />
                     </td>
                   </tr>
                 ))}
@@ -533,7 +554,21 @@ export function Dashboard() {
                   <td className="py-1.5 pr-2 text-right font-mono text-xs text-slate-500">
                     {g.files_delta > 0 ? "+" : ""}{g.files_delta}
                   </td>
-                  <td className="py-1.5 pr-2" title={offenders[g.path]?.cmdline ?? undefined}>
+                  <td className="py-1.5 pr-2 flex items-center gap-1 shrink-0 whitespace-nowrap">
+                    <CopyPathButton path={g.path} />
+                    <PathInspectButton path={g.path} />
+                    {addToDeletion && (
+                      <button
+                        onClick={() => { addToDeletion.addPath(g.path); toast({ type: "info", text: "Added to Deletion" }); }}
+                        title="Add to Deletion"
+                        className="p-1.5 rounded hover:bg-slate-700 text-slate-500 hover:text-slate-300 transition-colors"
+                      >
+                        <Plus size={12} />
+                      </button>
+                    )}
+                    <DeletePathButton path={g.path} onDeleted={load} />
+                  </td>
+                  <td className="py-1.5 pl-2 min-w-0 overflow-hidden" title={offenders[g.path]?.cmdline ?? undefined}>
                     {offenders[g.path] ? (
                       <span className="text-xs text-amber-300 font-medium truncate block max-w-[120px]">
                         {offenders[g.path]!.process_name}
@@ -541,10 +576,6 @@ export function Dashboard() {
                     ) : (
                       <span className="text-slate-600">—</span>
                     )}
-                  </td>
-                  <td className="py-1.5 pl-2 flex items-center gap-1">
-                    <PathInspectButton path={g.path} />
-                    <DeletePathButton path={g.path} onDeleted={load} />
                   </td>
                 </tr>
               ))}
@@ -585,12 +616,13 @@ export function Dashboard() {
                     <td className="py-1.5 pr-2 text-right font-mono text-xs text-slate-500">
                       {g.files_delta > 0 ? "+" : ""}{g.files_delta}
                     </td>
-                    <td className="py-1.5 pr-2">
-                      <span className="text-slate-600">—</span>
-                    </td>
-                    <td className="py-1.5 pl-2 flex items-center gap-1">
+                    <td className="py-1.5 pr-2 flex items-center gap-1 shrink-0 whitespace-nowrap">
+                      <CopyPathButton path={g.path} />
                       <PathInspectButton path={g.path} />
                       <DeletePathButton path={g.path} onDeleted={load} />
+                    </td>
+                    <td className="py-1.5 pl-2 min-w-0 overflow-hidden">
+                      <span className="text-slate-600">—</span>
                     </td>
                   </tr>
                 ))}
@@ -601,9 +633,17 @@ export function Dashboard() {
           {/* Disk Usage Over Time */}
           {timeline.length > 1 && (
             <Card>
-              <h3 className="text-sm font-semibold text-white mb-3">
-                Disk Usage Over Time
-              </h3>
+              <div className="flex items-center gap-2 mb-3">
+                <h3 className="text-sm font-semibold text-white">
+                  Disk Usage Over Time
+                </h3>
+                <span
+                  className="inline-flex items-center px-2.5 py-0.5 rounded-md bg-slate-800/80 border border-slate-700/80 font-mono text-xs text-slate-300 truncate max-w-[200px]"
+                  title={snapshots[0]?.root_path}
+                >
+                  {snapshots[0]?.root_path ?? "/"}
+                </span>
+              </div>
               <ResponsiveContainer width="100%" height={200}>
                 <AreaChart data={timeline}>
                   <XAxis
@@ -621,7 +661,27 @@ export function Dashboard() {
                       borderRadius: 8,
                       fontSize: 12,
                     }}
-                    formatter={(v: any) => formatBytesAbs(Number(v))}
+                    content={({ active, payload, label }) => {
+                      if (!active || !payload?.length) return null;
+                      const p = payload[0]?.payload as { bytes: number; delta?: number };
+                      const bytes = p?.bytes ?? payload[0]?.value;
+                      const delta = p?.delta;
+                      return (
+                        <div className="px-3 py-2 space-y-1">
+                          <p className="text-slate-300 font-medium">{label}</p>
+                          <p className="font-mono text-white">{formatBytesAbs(Number(bytes))}</p>
+                          {delta !== undefined && (
+                            <p
+                              className={`font-mono text-xs ${
+                                delta > 0 ? "text-red-400" : delta < 0 ? "text-emerald-400" : "text-slate-500"
+                              }`}
+                            >
+                              Change: {delta > 0 ? "+" : ""}{formatBytes(delta)} vs previous
+                            </p>
+                          )}
+                        </div>
+                      );
+                    }}
                   />
                   <Area
                     type="monotone"

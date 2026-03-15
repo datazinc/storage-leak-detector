@@ -33,12 +33,15 @@ def default_excludes() -> list[str]:
             "/private/var/vm",
         ]
     if system == "Windows":
-        return [
-            "C:\\$Recycle.Bin",
-            "C:\\System Volume Information",
-            "C:\\pagefile.sys",
-            "C:\\hiberfil.sys",
-        ]
+        import string
+        drives = [f"{d}:\\" for d in string.ascii_uppercase if os.path.exists(f"{d}:\\")]
+        excludes = []
+        for drive in drives:
+            excludes.append(f"{drive}$Recycle.Bin")
+            excludes.append(f"{drive}System Volume Information")
+        sys_drive = os.environ.get("SystemDrive", "C:") + "\\"
+        excludes.extend([f"{sys_drive}pagefile.sys", f"{sys_drive}hiberfil.sys"])
+        return excludes
     return common
 
 

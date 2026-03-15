@@ -7,7 +7,7 @@ import { ResizableTable } from "../components/ResizableTable";
 import { toast } from "../components/Toast";
 
 const PROCESS_IO_COLS = [
-  { key: "path", label: "Path", minWidth: 150 },
+  { key: "path", label: "Path", defaultWidth: 200, minWidth: 100 },
   { key: "last", label: "Last sample", defaultWidth: 110, minWidth: 90 },
   { key: "samples", label: "Samples", defaultWidth: 80, minWidth: 60, align: "right" as const },
   { key: "actions", label: "", defaultWidth: 48, minWidth: 40 },
@@ -90,9 +90,9 @@ export function ProcessIO() {
           </div>
         ) : (
           <ResizableTable columns={PROCESS_IO_COLS}>
-            {summary.map((s) => (
+            {summary.map((s, i) => (
               <tr
-                key={s.path}
+                key={s.path || `path-io-${i}`}
                 className="border-t border-slate-800 hover:bg-slate-800/50"
               >
                 <td className="py-2 pr-2 font-mono text-xs text-slate-300 truncate" title={s.path}>

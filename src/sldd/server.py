@@ -14,13 +14,14 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import APIRouter, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from sldd.api import SLDD
+from sldd.snapshot import ScanStoppedError
 from sldd.models import ScanConfig
 
 _log = logging.getLogger("sldd.server")
@@ -174,6 +175,7 @@ class _WatchController:
                 self._api.sync_scan_config_from_settings()
                 result = self._api.adaptive_snapshot_and_detect(
                     progress=self._on_progress,
+                    stop_check=lambda: self._stop.is_set(),
                 )
                 report, plan, compact_result = result
                 elapsed = _time.monotonic() - scan_start
@@ -253,6 +255,9 @@ class _WatchController:
                         f"{compact_result.entries_removed} entries removed",
                     )
 
+            except ScanStoppedError:
+                _log.info("Watch scan stopped by user")
+                break
             except Exception as exc:
                 self._last_error = str(exc)
                 self._push_event("scan_error", str(exc))
@@ -373,6 +378,10 @@ class _ScanJob:
         self.kind = kind
         self.phase = "starting"
         self._stop_requested = False
+        self._pause_requested = False
+        self._paused = False
+        self._resume_event = threading.Event()
+        self._resume_event.set()
         self.current_path = ""
         self.dirs_scanned = 0
         self.files_checked = 0
@@ -391,6 +400,7 @@ class _ScanJob:
             "id": self.id,
             "kind": self.kind,
             "phase": self.phase,
+            "paused": self._paused,
             "current_path": self.current_path,
             "dirs_scanned": self.dirs_scanned,
             "files_checked": self.files_checked,
@@ -447,6 +457,11 @@ def _run_largest_scan(
         stack: list[tuple[str, int]] = [(root, 0)]
 
         while stack:
+            if job._stop_requested:
+                break
+            _wait_if_paused(job)
+            if job._stop_requested:
+                break
             dirpath, depth = stack.pop()
             job.dirs_scanned += 1
             if job.dirs_scanned % 200 == 0:
@@ -459,6 +474,8 @@ def _run_largest_scan(
 
             with entries:
                 for entry in entries:
+                    if job._stop_requested:
+                        break
                     try:
                         if entry.is_file(follow_symlinks=False):
                             if entry.path in excluded:
@@ -507,6 +524,25 @@ def _run_largest_scan(
 
 def _request_stop(job: _ScanJob) -> None:
     job._stop_requested = True
+    job._resume_event.set()  # Wake thread if blocked in _wait_if_paused
+
+
+def _request_pause(job: _ScanJob) -> None:
+    job._pause_requested = True
+
+
+def _request_resume(job: _ScanJob) -> None:
+    job._pause_requested = False
+    job._resume_event.set()
+
+
+def _wait_if_paused(job: _ScanJob) -> None:
+    """Block until resumed or stop requested."""
+    while job._pause_requested and not job._stop_requested:
+        job._paused = True
+        job._resume_event.clear()
+        job._resume_event.wait()
+    job._paused = False
 
 
 def _run_duplicates_scan(
@@ -534,6 +570,9 @@ def _run_duplicates_scan(
         stack: list[tuple[str, int]] = [(root, 0)]
 
         while stack and not job._stop_requested:
+            _wait_if_paused(job)
+            if job._stop_requested:
+                break
             dirpath, depth = stack.pop()
             job.dirs_scanned += 1
             if job.dirs_scanned % 200 == 0:
@@ -584,6 +623,9 @@ def _run_duplicates_scan(
         for sz, paths in candidates.items():
             if job._stop_requested:
                 break
+            _wait_if_paused(job)
+            if job._stop_requested:
+                break
             for p in paths:
                 if job._stop_requested:
                     break
@@ -616,6 +658,9 @@ def _run_duplicates_scan(
         full_map: dict[str, list[str]] = {}
 
         for _key, paths in partial_candidates.items():
+            if job._stop_requested:
+                break
+            _wait_if_paused(job)
             if job._stop_requested:
                 break
             for p in paths:
@@ -786,10 +831,11 @@ class PathOpenRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 def _register_routes(app: FastAPI) -> None:
+    api_router = APIRouter(prefix="/api", tags=["api"])
 
     # -- Snapshots -----------------------------------------------------------
 
-    @app.get("/api/snapshots")
+    @api_router.get("/snapshots")
     def list_snapshots(
         limit: int = Query(50, ge=1, le=1000),
         depth: int | None = Query(None, description="Filter by scan_depth"),
@@ -798,14 +844,14 @@ def _register_routes(app: FastAPI) -> None:
         snaps = api.list_snapshots(limit=limit, scan_depth=depth)
         return [_serialize(s) for s in snaps]
 
-    @app.get("/api/snapshots/depths")
+    @api_router.get("/snapshots/depths")
     def snapshot_depths():
         """Return available scan depths and snapshot counts: [{depth, count}, ...]."""
         api = _get_api()
         rows = api.get_snapshot_depths()
         return [{"depth": d, "count": c} for d, c in rows]
 
-    @app.post("/api/snapshots")
+    @api_router.post("/snapshots")
     def create_snapshot(req: SnapshotRequest):
         api = _get_api()
         api.sync_scan_config_from_settings()
@@ -816,7 +862,7 @@ def _register_routes(app: FastAPI) -> None:
             raise HTTPException(500, f"Snapshot failed: {exc}") from exc
         return _serialize(snap)
 
-    @app.get("/api/snapshots/{snapshot_id}")
+    @api_router.get("/snapshots/{snapshot_id}")
     def get_snapshot(snapshot_id: int):
         api = _get_api()
         snap = api.get_snapshot(snapshot_id)
@@ -824,13 +870,13 @@ def _register_routes(app: FastAPI) -> None:
             raise HTTPException(404, "Snapshot not found")
         return _serialize(snap)
 
-    @app.delete("/api/snapshots/{snapshot_id}")
+    @api_router.delete("/snapshots/{snapshot_id}")
     def delete_snapshot(snapshot_id: int):
         api = _get_api()
         api.delete_snapshot(snapshot_id)
         return {"ok": True}
 
-    @app.post("/api/snapshots/prune")
+    @api_router.post("/snapshots/prune")
     def prune_snapshots(req: PruneRequest):
         api = _get_api()
         deleted = api.prune(keep=req.keep)
@@ -838,7 +884,7 @@ def _register_routes(app: FastAPI) -> None:
 
     # -- Diff & Detection ----------------------------------------------------
 
-    @app.get("/api/diff")
+    @api_router.get("/diff")
     def compute_diff(
         old: int = Query(...), new: int = Query(...),
     ):
@@ -851,11 +897,11 @@ def _register_routes(app: FastAPI) -> None:
         if d is None:
             raise HTTPException(
                 400,
-                "Snapshots have incompatible scan depths — only compare scans at the same depth",
+                "Snapshots are incomparable (different scan roots or depths)",
             )
         return _serialize(d)
 
-    @app.get("/api/diff/latest")
+    @api_router.get("/diff/latest")
     def diff_latest():
         api = _get_api()
         snaps = api.list_snapshots(limit=2)
@@ -865,11 +911,11 @@ def _register_routes(app: FastAPI) -> None:
         if d is None:
             raise HTTPException(
                 400,
-                "Latest snapshots have incompatible scan depths — only compare scans at the same depth",
+                "Latest snapshots are incomparable (different scan roots or depths)",
             )
         return _serialize(d)
 
-    @app.get("/api/report")
+    @api_router.get("/report")
     def get_report(
         old: int | None = Query(None, description="Old snapshot ID"),
         new: int | None = Query(None, description="New snapshot ID"),
@@ -878,7 +924,10 @@ def _register_routes(app: FastAPI) -> None:
     ):
         api = _get_api()
         if depth is not None:
-            snaps = api.list_snapshots(limit=2, scan_depth=depth)
+            # Use same root_path as most recent snapshot (same watch scope)
+            latest = api.list_snapshots(limit=1)
+            root = latest[0].root_path if latest else None
+            snaps = api.list_snapshots(limit=2, scan_depth=depth, root_path=root)
             if len(snaps) < 2:
                 raise HTTPException(
                     400,
@@ -904,52 +953,71 @@ def _register_routes(app: FastAPI) -> None:
             raise HTTPException(500, f"Report failed: {exc}") from exc
         if report is None:
             _log.debug(
-                "Report failed: incompatible depths old=%s (depth=%s) new=%s (depth=%s)",
-                old_id, getattr(old_snap, "scan_depth", None),
-                new_id, getattr(new_snap, "scan_depth", None),
+                "Report failed: incompatible old=%s (root=%s depth=%s) new=%s (root=%s depth=%s)",
+                old_id, getattr(old_snap, "root_path", "?"), getattr(old_snap, "scan_depth", None),
+                new_id, getattr(new_snap, "root_path", "?"), getattr(new_snap, "scan_depth", None),
             )
             raise HTTPException(
                 400,
-                "Snapshots have incompatible scan depths — use ?depth=N to compare at a specific depth",
+                "Snapshots are incomparable (different scan roots or depths) — compare snapshots from the same watch",
             )
         result = api.report_dict(report)
         if depth is not None:
-            result["_meta"] = {"depth": depth, "matching_snapshots": len(api.list_snapshots(limit=1000, scan_depth=depth))}
+            root = new_snap.root_path if new_snap else None
+            result["_meta"] = {
+                "depth": depth,
+                "matching_snapshots": len(api.list_snapshots(limit=1000, scan_depth=depth, root_path=root)),
+            }
         return result
 
     # -- Drill-Down ----------------------------------------------------------
 
-    @app.get("/api/drill/{snapshot_id}")
+    @api_router.get("/drill/{snapshot_id}")
     def drill(snapshot_id: int, path: str = Query(...)):
         api = _get_api()
         children = api.drill(snapshot_id, path)
         return [_serialize(c) for c in children]
 
-    @app.get("/api/history")
+    @api_router.get("/history")
     def path_history(
-        path: str = Query(...), limit: int = Query(50, ge=1),
+        path: str = Query(...),
+        limit: int = Query(50, ge=1),
+        scan_depth: str | None = Query(
+            None,
+            description="Only snapshots with this depth; use 'null' for legacy/full scans",
+        ),
     ):
         api = _get_api()
-        return api.path_history(path, limit=limit)
+        # Parse scan_depth: "null"/"legacy" = only full scans (scan_depth IS NULL), number = that depth
+        depth_val: int | None | str = None
+        if scan_depth is not None:
+            if str(scan_depth).lower() in ("null", "legacy"):
+                depth_val = "legacy"
+            else:
+                try:
+                    depth_val = int(scan_depth)
+                except ValueError:
+                    depth_val = None
+        return api.path_history(path, limit=limit, scan_depth=depth_val)
 
-    @app.get("/api/path/io")
+    @api_router.get("/path/io")
     def path_io_now(path: str = Query(...)):
         api = _get_api()
         return api.path_io_now(path)
 
-    @app.post("/api/path/io/offenders")
+    @api_router.post("/path/io/offenders")
     def path_io_offenders(req: PathIOOffendersRequest):
         api = _get_api()
         return api.path_io_offenders(req.paths)
 
-    @app.get("/api/path/io/history")
+    @api_router.get("/path/io/history")
     def path_io_history(
         path: str = Query(...), limit: int = Query(100, ge=1, le=500),
     ):
         api = _get_api()
         return api.path_io_history(path, limit=limit)
 
-    @app.post("/api/path/io/watch")
+    @api_router.post("/path/io/watch")
     def path_io_watch_start(req: PathIOWatchRequest):
         api = _get_api()
         api.path_io_watch_start(
@@ -957,23 +1025,23 @@ def _register_routes(app: FastAPI) -> None:
         )
         return {"ok": True}
 
-    @app.delete("/api/path/io/watch")
+    @api_router.delete("/path/io/watch")
     def path_io_watch_stop(path: str = Query(...)):
         api = _get_api()
         api.path_io_watch_stop(path)
         return {"ok": True}
 
-    @app.get("/api/path/io/watch")
+    @api_router.get("/path/io/watch")
     def path_io_watch_status():
         api = _get_api()
         return api.path_io_watch_status()
 
-    @app.get("/api/path/io/summary")
+    @api_router.get("/path/io/summary")
     def path_io_summary(limit: int = Query(50, ge=1, le=200)):
         api = _get_api()
         return api.path_io_summary(limit=limit)
 
-    @app.post("/api/path/open")
+    @api_router.post("/path/open")
     def path_open_in_finder(req: PathOpenRequest):
         """Open path in system file manager (Finder on macOS, Explorer on Windows)."""
         p = Path(req.path).resolve()
@@ -983,8 +1051,10 @@ def _register_routes(app: FastAPI) -> None:
             if sys.platform == "darwin":
                 subprocess.run(["open", "-R", str(p)], check=True, timeout=5)
             elif sys.platform == "win32":
+                path_str = str(p).replace('"', "")
+                select_arg = f'/select,"{path_str}"'
                 subprocess.run(
-                    ["explorer", "/select,", str(p)],
+                    ["explorer", select_arg],
                     check=True,
                     timeout=5,
                     creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
@@ -996,7 +1066,7 @@ def _register_routes(app: FastAPI) -> None:
             raise HTTPException(500, f"Failed to open: {e}") from e
         return {"ok": True}
 
-    @app.get("/api/top/{snapshot_id}")
+    @api_router.get("/top/{snapshot_id}")
     def top_dirs(
         snapshot_id: int, limit: int = Query(20, ge=1, le=200),
     ):
@@ -1006,7 +1076,7 @@ def _register_routes(app: FastAPI) -> None:
 
     # -- Scan Jobs (largest files, duplicates) --------------------------------
 
-    @app.post("/api/scan/largest")
+    @api_router.post("/scan/largest")
     def start_largest_scan(
         root: str = Query(None),
         limit: int = Query(100, ge=1, le=5000),
@@ -1023,7 +1093,7 @@ def _register_routes(app: FastAPI) -> None:
         )
         return job.status()
 
-    @app.post("/api/scan/duplicates")
+    @api_router.post("/scan/duplicates")
     def start_duplicates_scan(
         root: str = Query(None),
         min_size: int = Query(1024, ge=0),
@@ -1040,14 +1110,14 @@ def _register_routes(app: FastAPI) -> None:
         )
         return job.status()
 
-    @app.get("/api/scan/{job_id}/status")
+    @api_router.get("/scan/{job_id}/status")
     def scan_job_status(job_id: str):
         job = _scan_jobs.get(job_id)
         if job is None:
             raise HTTPException(404, "Job not found")
         return job.status()
 
-    @app.post("/api/scan/{job_id}/stop")
+    @api_router.post("/scan/{job_id}/stop")
     def scan_job_stop(job_id: str):
         job = _scan_jobs.get(job_id)
         if job is None:
@@ -1055,7 +1125,27 @@ def _register_routes(app: FastAPI) -> None:
         _request_stop(job)
         return job.status()
 
-    @app.get("/api/scan/{job_id}/result")
+    @api_router.post("/scan/{job_id}/pause")
+    def scan_job_pause(job_id: str):
+        job = _scan_jobs.get(job_id)
+        if job is None:
+            raise HTTPException(404, "Job not found")
+        if job.done:
+            raise HTTPException(400, "Scan already finished")
+        _request_pause(job)
+        return job.status()
+
+    @api_router.post("/scan/{job_id}/resume")
+    def scan_job_resume(job_id: str):
+        job = _scan_jobs.get(job_id)
+        if job is None:
+            raise HTTPException(404, "Job not found")
+        if job.done:
+            raise HTTPException(400, "Scan already finished")
+        _request_resume(job)
+        return job.status()
+
+    @api_router.get("/scan/{job_id}/result")
     def scan_job_result(job_id: str):
         job = _scan_jobs.get(job_id)
         if job is None:
@@ -1066,7 +1156,7 @@ def _register_routes(app: FastAPI) -> None:
             raise HTTPException(500, job.error)
         return job.result
 
-    @app.get("/api/files/largest")
+    @api_router.get("/files/largest")
     def largest_files_sync(
         root: str = Query(None),
         limit: int = Query(50, ge=1, le=5000),
@@ -1083,7 +1173,7 @@ def _register_routes(app: FastAPI) -> None:
 
     # -- Playback ------------------------------------------------------------
 
-    @app.get("/api/playback/frames")
+    @api_router.get("/playback/frames")
     def playback_frames(
         from_id: int = Query(..., alias="from"),
         to_id: int = Query(..., alias="to"),
@@ -1106,7 +1196,7 @@ def _register_routes(app: FastAPI) -> None:
             raise HTTPException(500, f"Playback failed: {exc}") from exc
         return [_serialize(f) for f in frames]
 
-    @app.get("/api/playback/path-timeline")
+    @api_router.get("/playback/path-timeline")
     def playback_path_timeline(
         path: str = Query(...),
         from_id: int = Query(..., alias="from"),
@@ -1117,13 +1207,13 @@ def _register_routes(app: FastAPI) -> None:
 
     # -- Deletion ------------------------------------------------------------
 
-    @app.post("/api/delete/preview")
+    @api_router.post("/delete/preview")
     def delete_preview(req: DeletePreviewRequest):
         api = _get_api()
         preview = api.delete_preview(req.paths, force=req.force)
         return _serialize(preview)
 
-    @app.post("/api/delete/execute")
+    @api_router.post("/delete/execute")
     def delete_execute(req: DeleteExecuteRequest):
         api = _get_api()
         if not req.confirm:
@@ -1133,36 +1223,252 @@ def _register_routes(app: FastAPI) -> None:
         )
         return _serialize(result)
 
-    @app.get("/api/delete/history")
+    @api_router.get("/delete/history")
     def deletion_history(limit: int = Query(100, ge=1)):
         api = _get_api()
         return api.deletion_history(limit=limit)
 
     # -- Settings ------------------------------------------------------------
 
-    @app.get("/api/settings")
+    @api_router.get("/settings")
     def get_settings():
         api = _get_api()
         return api.get_settings()
 
-    @app.put("/api/settings")
+    @api_router.put("/settings")
     def update_settings(req: SettingsUpdateRequest):
         api = _get_api()
         api.save_settings(req.settings)
         return {"ok": True}
 
-    @app.get("/api/db-info")
+    @api_router.get("/running-as-root")
+    def running_as_root():
+        """Return whether the server process is running with root/admin privileges."""
+        import os
+        if sys.platform == "win32":
+            try:
+                import ctypes
+                return {"running_as_root": ctypes.windll.shell32.IsUserAnAdmin() != 0}  # type: ignore[attr-defined]
+            except Exception:
+                return {"running_as_root": False}
+        return {"running_as_root": os.geteuid() == 0}
+
+    @api_router.get("/can-restart-as-regular-user")
+    def can_restart_as_regular_user():
+        """Check if we can restart as the original (non-root) user."""
+        import os
+        if sys.platform == "win32":
+            return {"can_restart": False, "reason": "Windows"}
+        if os.geteuid() != 0:
+            return {"can_restart": False, "reason": "Already running as regular user"}
+        sudo_user = os.environ.get("SUDO_USER")
+        if not sudo_user:
+            return {"can_restart": False, "reason": "No SUDO_USER (not started via sudo)"}
+        return {"can_restart": True, "sudo_user": sudo_user}
+
+    @api_router.get("/can-restart-as-administrator")
+    def can_restart_as_administrator():
+        """Check if we can offer to restart with admin/root privileges (when not elevated)."""
+        import os
+        if sys.platform == "win32":
+            try:
+                import ctypes
+                if ctypes.windll.shell32.IsUserAnAdmin() != 0:  # type: ignore[attr-defined]
+                    return {"can_restart": False, "reason": "Already running as administrator"}
+            except Exception:
+                return {"can_restart": False, "reason": "Cannot detect admin status"}
+            return {"can_restart": True}
+        if os.geteuid() == 0:
+            return {"can_restart": False, "reason": "Already running as root"}
+        if sys.platform == "darwin":
+            return {"can_restart": True}
+        if sys.platform == "linux":
+            import shutil
+            if shutil.which("pkexec"):
+                return {"can_restart": True}
+            return {"can_restart": False, "reason": "pkexec not found (install polkit)"}
+        return {"can_restart": False, "reason": "Unsupported platform"}
+
+    def _find_available_port(host: str, start: int, max_tries: int = 20) -> int:
+        import socket
+        for i in range(max_tries):
+            p = start + i
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                try:
+                    s.bind((host, p))
+                    return p
+                except OSError:
+                    continue
+        return start
+
+    @api_router.post("/restart-as-regular-user")
+    def restart_as_regular_user(request: Request):
+        """Fix permissions on db/dist, then restart server as regular user."""
+        import os
+        import shutil
+        if sys.platform == "win32":
+            raise HTTPException(400, "Not supported on Windows")
+        if os.geteuid() != 0:
+            raise HTTPException(400, "Already running as regular user")
+        sudo_user = os.environ.get("SUDO_USER")
+        sudo_uid = os.environ.get("SUDO_UID")
+        sudo_gid = os.environ.get("SUDO_GID")
+        if not sudo_user or not sudo_uid:
+            raise HTTPException(400, "No SUDO_USER (start with sudo sldd web)")
+        api = _get_api()
+        db_path = os.path.realpath(api.scan_config.db_path)
+        scan_root = api.scan_config.root
+        host = str(request.url.hostname or "127.0.0.1")
+        preferred_port = request.url.port or 8080
+        port = _find_available_port(host, preferred_port)
+        project_root = Path(__file__).resolve().parent.parent.parent
+        frontend_dist = project_root / "frontend" / "dist"
+        uid, gid = int(sudo_uid), int(sudo_gid) if sudo_gid else int(sudo_uid)
+        try:
+            for p in [db_path, db_path + "-wal", db_path + "-shm"]:
+                if os.path.exists(p):
+                    os.chown(p, uid, gid)
+            if frontend_dist.is_dir():
+                subprocess.run(
+                    ["chown", "-R", f"{uid}:{gid}", str(frontend_dist)],
+                    check=False,
+                    capture_output=True,
+                    timeout=30,
+                )
+        except OSError as e:
+            _log.warning("chown failed: %s", e)
+        import shlex
+        sldd_path = shutil.which("sldd")
+        if sldd_path:
+            cmd = [sldd_path, "web"]
+        else:
+            cmd = [sys.executable, "-m", "sldd.cli", "web"]
+        cmd += ["--no-auto-restart", "--no-open", "-p", str(port)]
+        env_str = " ".join(
+            f"{k}={shlex.quote(str(v))}"
+            for k, v in [
+                ("SLDD_DB_PATH", db_path),
+                ("SLDD_SCAN_ROOT", scan_root),
+                ("PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION", "python"),
+            ]
+        )
+        cmd_str = " ".join(shlex.quote(c) for c in cmd)
+        full_cmd = f"sleep 3 && exec sudo -u {shlex.quote(sudo_user)} env {env_str} {cmd_str}"
+        subprocess.Popen(
+            ["sh", "-c", full_cmd],
+            start_new_session=True,
+        )
+        import threading
+        def _exit_later():
+            import time
+            time.sleep(1)
+            os._exit(0)
+        threading.Thread(target=_exit_later, daemon=True).start()
+        url = f"http://{host}:{port}"
+        return {
+            "ok": True,
+            "message": "Restarting as regular user in 3 seconds…",
+            "port": port,
+            "url": url,
+        }
+
+    @api_router.post("/restart-as-administrator")
+    def restart_as_administrator(request: Request):
+        """Restart the server with admin/root privileges (when not elevated)."""
+        import os
+        import shutil
+        import shlex
+
+        api = _get_api()
+        db_path = os.path.realpath(api.scan_config.db_path)
+        scan_root = api.scan_config.root
+        host = str(request.url.hostname or "127.0.0.1")
+        preferred_port = request.url.port or 8080
+        port = _find_available_port(host, preferred_port)
+        url = f"http://{host}:{port}"
+
+        sldd_path = shutil.which("sldd")
+        if sldd_path:
+            cmd = [sldd_path, "web"]
+        else:
+            cmd = [sys.executable, "-m", "sldd.cli", "web"]
+        cmd += ["--no-auto-restart", "--no-open", "-p", str(port)]
+        env_vars = [
+            ("SLDD_DB_PATH", db_path),
+            ("SLDD_SCAN_ROOT", scan_root),
+            ("PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION", "python"),
+        ]
+
+        if sys.platform == "win32":
+            try:
+                import ctypes
+                import tempfile
+                if ctypes.windll.shell32.IsUserAnAdmin() != 0:  # type: ignore[attr-defined]
+                    raise HTTPException(400, "Already running as administrator")
+            except HTTPException:
+                raise
+            except Exception:
+                raise HTTPException(400, "Cannot detect admin status")
+            env_lines = "\n".join(f'$env:{k} = "{str(v).replace(chr(34), "")}"' for k, v in env_vars)
+            cmd_invoke = " ".join(f'"{str(c).replace(chr(34), "`"")}"' for c in cmd)
+            ps_content = f"{env_lines}\n& {cmd_invoke}\n"
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".ps1", delete=False, encoding="utf-8") as f:
+                f.write(ps_content)
+                ps_path = f.name
+            ps_path_safe = str(ps_path).replace('"', "")
+            subprocess.Popen(
+                [
+                    "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                    "-Command", f'Start-Process powershell -ArgumentList "-NoProfile","-ExecutionPolicy","Bypass","-File","{ps_path_safe}" -Verb RunAs'
+                ],
+                start_new_session=True,
+                creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
+            )
+        elif sys.platform == "darwin":
+            if os.geteuid() == 0:
+                raise HTTPException(400, "Already running as root")
+            env_str = " ".join(f"{k}={shlex.quote(str(v))}" for k, v in env_vars)
+            cmd_str = " ".join(shlex.quote(c) for c in cmd)
+            script = f"{env_str} {cmd_str}"
+            subprocess.Popen(
+                ["osascript", "-e", f'do shell script {shlex.quote(script)} with administrator privileges'],
+                start_new_session=True,
+            )
+        elif sys.platform == "linux":
+            if os.geteuid() == 0:
+                raise HTTPException(400, "Already running as root")
+            if not shutil.which("pkexec"):
+                raise HTTPException(400, "pkexec not found (install polkit)")
+            env_str = " ".join(f"{k}={shlex.quote(str(v))}" for k, v in env_vars)
+            cmd_str = " ".join(shlex.quote(c) for c in cmd)
+            full_cmd = f"{env_str} {cmd_str}"
+            subprocess.Popen(
+                ["pkexec", "sh", "-c", full_cmd],
+                start_new_session=True,
+            )
+        else:
+            raise HTTPException(400, "Unsupported platform")
+
+        import threading
+        def _exit_later():
+            import time
+            time.sleep(1)
+            os._exit(0)
+        threading.Thread(target=_exit_later, daemon=True).start()
+        return {"ok": True, "message": "Restarting with administrator privileges…", "port": port, "url": url}
+
+    @api_router.get("/db-info")
     def db_info():
         api = _get_api()
         return api.get_db_info()
 
-    @app.post("/api/db/vacuum")
+    @api_router.post("/db/vacuum")
     def vacuum_db():
         api = _get_api()
         api.vacuum_db()
         return {"ok": True}
 
-    @app.get("/api/db/size")
+    @api_router.get("/db/size")
     def db_size_live():
         """Lightweight endpoint for polling DB size in the sidebar."""
         import contextlib
@@ -1182,7 +1488,7 @@ def _register_routes(app: FastAPI) -> None:
         if _watcher is not None and _watcher.running:
             _watcher.stop()
 
-    @app.post("/api/db/reset")
+    @api_router.post("/db/reset")
     def reset_db():
         """Drop all data and recreate the schema."""
         api = _get_api()
@@ -1204,7 +1510,7 @@ def _register_routes(app: FastAPI) -> None:
             raise HTTPException(500, f"Reset failed: {exc}") from exc
         return {"ok": True}
 
-    @app.post("/api/db/recover")
+    @api_router.post("/db/recover")
     def recover_db_endpoint():
         """Delete corrupted DB files and reopen with fresh schema."""
         api = _get_api()
@@ -1218,18 +1524,18 @@ def _register_routes(app: FastAPI) -> None:
 
     # -- Adaptive Scanning ---------------------------------------------------
 
-    @app.get("/api/adaptive/stats")
+    @api_router.get("/adaptive/stats")
     def adaptive_stats():
         api = _get_api()
         return api.adaptive_stats()
 
-    @app.get("/api/adaptive/plan")
+    @api_router.get("/adaptive/plan")
     def adaptive_plan():
         api = _get_api()
         plan = api.plan_next_scan()
         return _serialize(plan)
 
-    @app.post("/api/adaptive/compact")
+    @api_router.post("/adaptive/compact")
     def adaptive_compact():
         api = _get_api()
         try:
@@ -1239,13 +1545,13 @@ def _register_routes(app: FastAPI) -> None:
             raise HTTPException(500, f"Compact failed: {exc}") from exc
         return _serialize(result)
 
-    @app.post("/api/adaptive/reset")
+    @api_router.post("/adaptive/reset")
     def adaptive_reset():
         api = _get_api()
         api.reset_adaptive()
         return {"ok": True}
 
-    @app.get("/api/adaptive/paths")
+    @api_router.get("/adaptive/paths")
     def adaptive_paths(
         status: str | None = Query(None),
         limit: int = Query(200, ge=1, le=5000),
@@ -1256,42 +1562,46 @@ def _register_routes(app: FastAPI) -> None:
 
     # -- Watch Mode ----------------------------------------------------------
 
-    @app.get("/api/watch/status")
+    @api_router.get("/watch/status")
     def watch_status():
         if _watcher is None:
             return {"running": False, "error": "Watch controller not initialized"}
         return _watcher.status()
 
-    @app.post("/api/watch/start")
+    @api_router.post("/watch/start")
     def watch_start(req: WatchStartRequest):
         if _watcher is None:
             raise HTTPException(500, "Watch controller not initialized")
         _watcher.start(interval=req.interval_seconds, one_shot=req.one_shot)
         return _watcher.status()
 
-    @app.post("/api/watch/stop")
+    @api_router.post("/watch/stop")
     def watch_stop():
         if _watcher is None:
             raise HTTPException(500, "Watch controller not initialized")
         _watcher.stop()
         return _watcher.status()
 
-    @app.get("/api/watch/events")
+    @api_router.get("/watch/events")
     def watch_events(after: int = Query(0, ge=0)):
         if _watcher is None:
             return []
         return _watcher.events_since(after)
 
-    @app.get("/api/watch/report")
+    @api_router.get("/watch/report")
     def watch_last_report():
         if _watcher is None or _watcher.last_report() is None:
             raise HTTPException(404, "No watch report yet")
         return _watcher.last_report()
 
-    # -- SPA fallback --------------------------------------------------------
+    app.include_router(api_router)
+
+    # -- SPA fallback (must be last; never matches /api/*) --------------------
 
     @app.get("/{full_path:path}")
     def spa_fallback(full_path: str):
+        if full_path.startswith("api/") or full_path == "api":
+            raise HTTPException(404, "Not found")
         if FRONTEND_DIR.is_dir():
             # Serve actual static files (JS, CSS, images) if they exist on disk
             static_file = FRONTEND_DIR / full_path

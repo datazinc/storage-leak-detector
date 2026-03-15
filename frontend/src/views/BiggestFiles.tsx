@@ -6,6 +6,8 @@ import {
   HardDrive,
   CheckSquare,
   Square,
+  Pause,
+  Play,
   AlertTriangle,
   ShieldOff,
 } from "lucide-react";
@@ -13,6 +15,7 @@ import { api, formatBytesAbs, type LargeFile, type ScanJobStatus } from "../api"
 import { useScanContext } from "../context/ScanContext";
 import { Card, StatCard } from "../components/Card";
 import { DeleteConfirmModal } from "../components/DeleteConfirmModal";
+import { CopyPathButton } from "../components/CopyPathButton";
 import { PathPicker } from "../components/PathPicker";
 import { ResizableTable } from "../components/ResizableTable";
 import { ScanProgress } from "../components/ScanProgress";
@@ -25,10 +28,11 @@ const FILE_COLS = [
   { key: "size", label: "Size", defaultWidth: 90, minWidth: 70, align: "right" as const },
   { key: "dir", label: "Directory", minWidth: 140 },
   { key: "mtime", label: "Modified", defaultWidth: 120, minWidth: 90 },
+  { key: "copy", label: "", defaultWidth: 36, minWidth: 32 },
 ];
 
 export function BiggestFiles() {
-  const { activeJob, setActiveJob, isOtherScanning } = useScanContext();
+  const { activeJobs, setActiveJob, isScanTypeActive, getActiveJob } = useScanContext();
   const [files, setFiles] = useState<LargeFile[]>([]);
   const [scanStatus, setScanStatus] = useState<ScanJobStatus | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -39,6 +43,7 @@ export function BiggestFiles() {
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(50);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const autoStartedRef = useRef(false);
 
   const stopPolling = useCallback(() => {
     if (pollRef.current) {
@@ -54,7 +59,7 @@ export function BiggestFiles() {
         setScanStatus(s);
         if (s.done) {
           stopPolling();
-          setActiveJob(null);
+          setActiveJob("biggest", null);
           if (!s.error) {
             const result = await api.scanResult<LargeFile[]>(jobId);
             setFiles(result);
@@ -69,8 +74,8 @@ export function BiggestFiles() {
   }, [stopPolling, setActiveJob]);
 
   const scan = useCallback(async () => {
-    if (isOtherScanning("biggest")) {
-      toast({ type: "warning", text: "Another scan (Duplicates) is already running. Wait for it to finish." });
+    if (isScanTypeActive("biggest")) {
+      toast({ type: "warning", text: "Biggest Files scan already running." });
       return;
     }
     stopPolling();
@@ -80,27 +85,31 @@ export function BiggestFiles() {
     try {
       const job = await api.startLargestScan(limit, depth, scanRoot.trim() || undefined);
       setScanStatus(job);
-      setActiveJob({ type: "biggest", jobId: job.id });
+      setActiveJob("biggest", job.id);
       pollJob(job.id);
     } catch (err: any) {
-      setActiveJob(null);
+      setActiveJob("biggest", null);
       toast({ type: "error", text: `Scan failed: ${err?.message ?? err}` });
     }
-  }, [limit, depth, scanRoot, stopPolling, isOtherScanning, setActiveJob, pollJob]);
+  }, [limit, depth, scanRoot, stopPolling, isScanTypeActive, setActiveJob, pollJob]);
 
   useEffect(() => {
-    if (activeJob?.type === "biggest") {
-      api.scanStatus(activeJob.jobId).then((s) => {
+    const jobId = getActiveJob("biggest");
+    if (jobId) {
+      api.scanStatus(jobId).then((s) => {
         setScanStatus(s);
-        if (!s.done) pollJob(activeJob.jobId);
+        if (!s.done) pollJob(jobId);
         else {
-          setActiveJob(null);
-          if (!s.error) api.scanResult<LargeFile[]>(activeJob.jobId).then(setFiles);
+          setActiveJob("biggest", null);
+          if (!s.error) api.scanResult<LargeFile[]>(jobId).then(setFiles);
         }
-      }).catch(() => setActiveJob(null));
+      }).catch(() => setActiveJob("biggest", null));
+    } else if (files.length === 0 && !autoStartedRef.current) {
+      autoStartedRef.current = true;
+      scan();
     }
     return stopPolling;
-  }, [activeJob?.type, activeJob?.jobId, pollJob, setActiveJob, stopPolling]);
+  }, [activeJobs.biggest, pollJob, setActiveJob, stopPolling, scan, files.length]);
 
   const toggle = (path: string) => {
     setSelected((prev) => {
@@ -179,7 +188,7 @@ export function BiggestFiles() {
     await executeDelete(deletePreview.paths, false);
   };
 
-  const isScanning = scanStatus != null && !scanStatus.done;
+  const scanInProgress = scanStatus != null && !scanStatus.done;
   const selectedTotal = files
     .filter((f) => selected.has(f.path))
     .reduce((sum, f) => sum + f.size_bytes, 0);
@@ -234,20 +243,39 @@ export function BiggestFiles() {
           </div>
           <button
             onClick={scan}
-            disabled={isScanning}
+            disabled={scanInProgress}
             className="flex items-center gap-2 px-4 py-2 text-sm bg-blue-600 hover:bg-blue-500 disabled:opacity-50 rounded-lg text-white font-medium transition-colors"
           >
-            {isScanning ? <Loader2 size={14} className="animate-spin" /> : <FileSearch size={14} />}
-            {isScanning ? "Scanning..." : "Scan"}
+            {scanInProgress ? <Loader2 size={14} className="animate-spin" /> : <FileSearch size={14} />}
+            {scanInProgress ? "Scanning..." : "Scan"}
           </button>
-          {isScanning && scanStatus?.id && (
-            <button
-              onClick={() => api.scanStop(scanStatus.id)}
-              className="flex items-center gap-2 px-4 py-2 text-sm bg-red-600 hover:bg-red-500 rounded-lg text-white font-medium transition-colors"
-            >
-              <Square size={14} />
-              Stop
-            </button>
+          {scanInProgress && scanStatus?.id && (
+            <>
+              {scanStatus.paused ? (
+                <button
+                  onClick={() => api.scanResume(scanStatus.id).then(setScanStatus)}
+                  className="flex items-center gap-2 px-4 py-2 text-sm bg-emerald-600 hover:bg-emerald-500 rounded-lg text-white font-medium transition-colors"
+                >
+                  <Play size={14} />
+                  Resume
+                </button>
+              ) : (
+                <button
+                  onClick={() => api.scanPause(scanStatus.id).then(setScanStatus)}
+                  className="flex items-center gap-2 px-4 py-2 text-sm bg-amber-600 hover:bg-amber-500 rounded-lg text-white font-medium transition-colors"
+                >
+                  <Pause size={14} />
+                  Pause
+                </button>
+              )}
+              <button
+                onClick={() => api.scanStop(scanStatus.id)}
+                className="flex items-center gap-2 px-4 py-2 text-sm bg-red-600 hover:bg-red-500 rounded-lg text-white font-medium transition-colors"
+              >
+                <Square size={14} />
+                Stop
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -326,7 +354,7 @@ export function BiggestFiles() {
         </div>
       )}
 
-      {files.length === 0 && !isScanning && (
+      {files.length === 0 && !scanInProgress && (
         <Card className="text-center py-16">
           <div className="max-w-md mx-auto">
             <div className="p-4 rounded-full bg-slate-800 w-fit mx-auto mb-4">
@@ -338,11 +366,11 @@ export function BiggestFiles() {
             </p>
             <button
               onClick={scan}
-              disabled={isScanning}
+              disabled={scanInProgress}
               className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 rounded-lg text-sm text-white font-medium transition-colors"
             >
               <FileSearch size={16} />
-              {isScanning ? "Scanning..." : "Start Scan"}
+              {scanInProgress ? "Scanning..." : "Start Scan"}
             </button>
           </div>
         </Card>
@@ -437,6 +465,9 @@ export function BiggestFiles() {
                 <td className="py-2 pr-2 font-mono text-xs text-slate-500 truncate max-w-[300px]" title={f.directory}>{f.directory}</td>
                 <td className="py-2 pr-2 text-xs text-slate-500 whitespace-nowrap">
                   {f.mtime ? new Date(f.mtime).toLocaleString([], { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—"}
+                </td>
+                <td className="py-1.5 pl-2">
+                  <CopyPathButton path={f.path} />
                 </td>
               </tr>
             ))}

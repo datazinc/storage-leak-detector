@@ -54,8 +54,8 @@ export function ResizableTable({ columns, children, className }: Props) {
   );
 
   return (
-    <div className={clsx("overflow-x-auto min-w-0 max-w-full", className)}>
-      <table ref={tableRef} className="w-full text-sm table-fixed">
+    <div className={clsx("min-w-0 w-full overflow-x-auto", className)}>
+      <table ref={tableRef} className="w-full text-sm table-fixed" style={{ minWidth: 650 }}>
         <thead>
           <tr className="text-left text-slate-500 text-xs uppercase">
             {columns.map((col, i) => (
@@ -107,7 +107,7 @@ function ResizableTh({
       {!isLast && (
         <span
           onMouseDown={onResizeStart}
-          className="absolute right-0 top-0 bottom-0 w-[5px] cursor-col-resize hover:bg-blue-500/40 transition-colors"
+          className="absolute right-0 top-0 bottom-0 w-1 -mr-px cursor-col-resize bg-slate-600 hover:bg-slate-500 active:bg-blue-500/60 transition-colors"
         />
       )}
     </th>

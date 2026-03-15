@@ -264,24 +264,31 @@ class SnapshotStore:
     # -- read ----------------------------------------------------------------
 
     def list_snapshots(
-        self, limit: int = 50, scan_depth: int | None = None,
+        self,
+        limit: int = 50,
+        scan_depth: int | None = None,
+        root_path: str | None = None,
     ) -> list[Snapshot]:
         """Return snapshot metadata (without entries) ordered newest-first.
         If scan_depth is set, only return snapshots with that depth.
+        If root_path is set, only return snapshots with that root (same watch scope).
         """
         with self._lock:
+            conditions = []
+            params: list[object] = []
             if scan_depth is not None:
-                rows = self.conn.execute(
-                    "SELECT id, timestamp, root_path, label, scan_depth "
-                    "FROM snapshots WHERE scan_depth = ? ORDER BY timestamp DESC LIMIT ?",
-                    (scan_depth, limit),
-                ).fetchall()
-            else:
-                rows = self.conn.execute(
-                    "SELECT id, timestamp, root_path, label, scan_depth "
-                    "FROM snapshots ORDER BY timestamp DESC LIMIT ?",
-                    (limit,),
-                ).fetchall()
+                conditions.append("scan_depth = ?")
+                params.append(scan_depth)
+            if root_path is not None:
+                conditions.append("root_path = ?")
+                params.append(root_path)
+            where = (" WHERE " + " AND ".join(conditions)) if conditions else ""
+            params.append(limit)
+            rows = self.conn.execute(
+                "SELECT id, timestamp, root_path, label, scan_depth "
+                f"FROM snapshots{where} ORDER BY timestamp DESC LIMIT ?",
+                params,
+            ).fetchall()
             return [
                 Snapshot(
                     id=r[0],
@@ -430,20 +437,56 @@ class SnapshotStore:
             ).fetchall()
             return rows
 
-    def get_path_history(self, path: str, *, limit: int = 50) -> list[tuple[int, str, int, int]]:
-        """Return (snapshot_id, timestamp, total_bytes, file_count) for a given path over time."""
+    def get_path_history(
+        self,
+        path: str,
+        *,
+        limit: int = 50,
+        scan_depth: int | None | str = None,
+    ) -> list[tuple[int, str, int, int]]:
+        """Return (snapshot_id, timestamp, total_bytes, file_count) for a given path over time.
+
+        If scan_depth is an int, only include snapshots with that depth.
+        If scan_depth is "legacy", only include snapshots with scan_depth IS NULL.
+        If scan_depth is None (not provided), no filter.
+        """
         with self._lock:
-            rows = self.conn.execute(
-                """
-                SELECT s.id, s.timestamp, e.total_bytes, e.file_count
-                FROM entries e
-                JOIN snapshots s ON s.id = e.snapshot_id
-                WHERE e.path = ?
-                ORDER BY s.timestamp DESC
-                LIMIT ?
-                """,
-                (path, limit),
-            ).fetchall()
+            if scan_depth == "legacy":
+                rows = self.conn.execute(
+                    """
+                    SELECT s.id, s.timestamp, e.total_bytes, e.file_count
+                    FROM entries e
+                    JOIN snapshots s ON s.id = e.snapshot_id
+                    WHERE e.path = ? AND s.scan_depth IS NULL
+                    ORDER BY s.timestamp DESC
+                    LIMIT ?
+                    """,
+                    (path, limit),
+                ).fetchall()
+            elif isinstance(scan_depth, int):
+                rows = self.conn.execute(
+                    """
+                    SELECT s.id, s.timestamp, e.total_bytes, e.file_count
+                    FROM entries e
+                    JOIN snapshots s ON s.id = e.snapshot_id
+                    WHERE e.path = ? AND s.scan_depth = ?
+                    ORDER BY s.timestamp DESC
+                    LIMIT ?
+                    """,
+                    (path, scan_depth, limit),
+                ).fetchall()
+            else:
+                rows = self.conn.execute(
+                    """
+                    SELECT s.id, s.timestamp, e.total_bytes, e.file_count
+                    FROM entries e
+                    JOIN snapshots s ON s.id = e.snapshot_id
+                    WHERE e.path = ?
+                    ORDER BY s.timestamp DESC
+                    LIMIT ?
+                    """,
+                    (path, limit),
+                ).fetchall()
             return rows
 
     # -- settings ------------------------------------------------------------

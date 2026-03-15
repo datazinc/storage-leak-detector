@@ -25,6 +25,7 @@ class TestBuildFrames:
                         file_count=5 + i, dir_count=0, depth=1,
                     ),
                 ],
+                root="/root",
                 timestamp=_dt.datetime(
                     2024, 1, 1, i, 0, 0, tzinfo=_dt.timezone.utc,
                 ),
@@ -71,6 +72,7 @@ class TestBuildFrames:
                 path="/root", total_bytes=100,
                 file_count=1, dir_count=0, depth=0,
             )],
+            root="/root",
         )
         saved = store.save_snapshot(snap)
         assert saved.id is not None
@@ -91,6 +93,7 @@ class TestPathTimeline:
                     path="/root", total_bytes=100 * (i + 1),
                     file_count=i + 1, dir_count=0, depth=0,
                 )],
+                root="/root",
                 timestamp=_dt.datetime(
                     2024, 1, 1 + i, tzinfo=_dt.timezone.utc,
                 ),

@@ -59,12 +59,15 @@ def build_frames(
             root_entry = store.get_entry(new_snap.id, prefix)
         else:
             root_entry = store.get_entry(new_snap.id, new_snap.root_path)
-        total_bytes = root_entry.total_bytes if root_entry else 0
+        # Skip frame when path is out of scope (scoped watch didn't capture this path)
+        if root_entry is None:
+            continue  # don't show as zero — skip data point
 
+        total_bytes = root_entry.total_bytes
         elapsed = (new_snap.timestamp - start_time).total_seconds()
 
         frames.append(PlaybackFrame(
-            frame_index=i - 1,
+            frame_index=len(frames),
             snapshot_id=new_snap.id,
             timestamp=new_snap.timestamp,
             elapsed_since_start_seconds=elapsed,

@@ -13,12 +13,18 @@ from sldd.models import DirEntry, ScanConfig, Snapshot
 from sldd.platform_utils import is_excluded, is_same_device, normalize_path, safe_scandir
 
 ProgressCallback = Callable[[str, int], None]  # (current_path, dirs_scanned)
+StopCheck = Callable[[], bool]  # returns True if scan should stop
+
+
+class ScanStoppedError(Exception):
+    """Raised when a scan is stopped via stop_check."""
 
 
 def take_snapshot(
     config: ScanConfig,
     *,
     progress: ProgressCallback | None = None,
+    stop_check: StopCheck | None = None,
     label: str | None = None,
     previous_entries: dict[str, DirEntry] | None = None,
 ) -> Snapshot:
@@ -47,6 +53,8 @@ def take_snapshot(
     stack: list[tuple[str, int]] = [(root, 0)]
 
     while stack:
+        if stop_check and stop_check():
+            raise ScanStoppedError()
         dirpath, depth = stack.pop()
         norm = normalize_path(dirpath)
 
@@ -65,6 +73,8 @@ def take_snapshot(
         scanned += 1
         if progress and scanned % 200 == 0:
             progress(norm, scanned)
+        if stop_check and stop_check():
+            raise ScanStoppedError()
 
         children = safe_scandir(dirpath)
         if not children and scanned > 1:

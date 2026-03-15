@@ -9,7 +9,7 @@ from __future__ import annotations
 import datetime as _dt
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from sldd.adaptive import (
     adaptive_cycle,
@@ -41,7 +41,7 @@ from sldd.models import (
 from sldd.playback import build_frames, build_path_timeline
 from sldd.report import print_report, report_to_dict, report_to_json
 from sldd.process_io import get_processes_with_path_open, sample_path_io
-from sldd.snapshot import ProgressCallback, take_snapshot
+from sldd.snapshot import ProgressCallback, ScanStoppedError, take_snapshot
 from sldd.storage import SnapshotStore
 
 
@@ -157,6 +157,7 @@ class SLDD:
         *,
         config: ScanConfig | None = None,
         progress: ProgressCallback | None = None,
+        stop_check: Callable[[], bool] | None = None,
         label: str = "",
     ) -> Snapshot:
         """Walk the filesystem and persist a new snapshot."""
@@ -169,15 +170,20 @@ class SLDD:
                 previous_entries = {e.path: e for e in latest.entries}
 
         snap = take_snapshot(
-            cfg, progress=progress, label=label,
+            cfg, progress=progress, stop_check=stop_check, label=label,
             previous_entries=previous_entries,
         )
         return self._store.save_snapshot(snap)
 
     def list_snapshots(
-        self, limit: int = 50, scan_depth: int | None = None,
+        self,
+        limit: int = 50,
+        scan_depth: int | None = None,
+        root_path: str | None = None,
     ) -> list[Snapshot]:
-        return self._store.list_snapshots(limit=limit, scan_depth=scan_depth)
+        return self._store.list_snapshots(
+            limit=limit, scan_depth=scan_depth, root_path=root_path,
+        )
 
     def get_snapshot_depths(self) -> list[tuple[int, int]]:
         """Return (scan_depth, count) for each depth with snapshots."""
@@ -265,9 +271,15 @@ class SLDD:
         return self._store.get_children(snapshot_id, path, entry.depth)
 
     def path_history(
-        self, path: str, limit: int = 50,
+        self,
+        path: str,
+        limit: int = 50,
+        *,
+        scan_depth: int | None | str = None,
     ) -> list[dict[str, Any]]:
-        rows = self._store.get_path_history(path, limit=limit)
+        rows = self._store.get_path_history(
+            path, limit=limit, scan_depth=scan_depth,
+        )
         return [
             {
                 "snapshot_id": r[0], "timestamp": r[1],
@@ -490,13 +502,18 @@ class SLDD:
         self,
         *,
         progress: ProgressCallback | None = None,
+        stop_check: Callable[[], bool] | None = None,
     ) -> tuple[Report | None, ScanPlan, CompactResult | None]:
         """Full adaptive cycle: plan → scan → diff → track → detect → compact."""
         effective_config, plan = plan_scan(
             self._store, self.adaptive_config, self.scan_config,
         )
 
-        snap = take_snapshot(effective_config, progress=progress)
+        snap = self.take_snapshot(
+            config=effective_config,
+            progress=progress,
+            stop_check=stop_check,
+        )
         snap = self._store.save_snapshot(snap)
 
         snaps = self.list_snapshots(limit=2)

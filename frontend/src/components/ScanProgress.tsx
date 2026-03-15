@@ -1,4 +1,4 @@
-import { FolderSearch, FileCheck, Hash, Loader2, CheckCircle, XCircle } from "lucide-react";
+import { FolderSearch, FileCheck, Hash, Loader2, CheckCircle, XCircle, Pause } from "lucide-react";
 import type { ScanJobStatus } from "../api";
 
 const PHASE_CONFIG: Record<string, { icon: typeof Loader2; label: string; color: string }> = {
@@ -19,8 +19,9 @@ interface Props {
 
 export function ScanProgress({ status }: Props) {
   const cfg = PHASE_CONFIG[status.phase] ?? PHASE_CONFIG.starting;
-  const Icon = cfg.icon;
-  const spinning = !status.done;
+  const Icon = status.paused ? Pause : cfg.icon;
+  const spinning = !status.done && !status.paused;
+  const label = status.paused ? "Paused" : cfg.label;
 
   return (
     <div className="bg-slate-800/60 border border-slate-700/50 rounded-xl p-4 space-y-3">
@@ -31,7 +32,7 @@ export function ScanProgress({ status }: Props) {
             size={16}
             className={`${cfg.color} ${spinning ? "animate-pulse" : ""}`}
           />
-          <span className={`text-sm font-medium ${cfg.color}`}>{cfg.label}</span>
+          <span className={`text-sm font-medium ${status.paused ? "text-amber-400" : cfg.color}`}>{label}</span>
         </div>
         <span className="text-xs text-slate-500 font-mono">
           {status.elapsed_seconds.toFixed(1)}s

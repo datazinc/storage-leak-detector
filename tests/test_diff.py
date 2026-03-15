@@ -18,6 +18,7 @@ class TestComputeDiff:
                 DirEntry(path="/root/logs", total_bytes=300, file_count=3, dir_count=0, depth=1),
                 DirEntry(path="/root/data", total_bytes=200, file_count=2, dir_count=0, depth=1),
             ],
+            root="/root",
             timestamp=_dt.datetime(2024, 1, 1, 10, 0, 0, tzinfo=_dt.timezone.utc),
         )
         s2 = make_snapshot(
@@ -26,6 +27,7 @@ class TestComputeDiff:
                 DirEntry(path="/root/logs", total_bytes=1200, file_count=10, dir_count=0, depth=1),
                 DirEntry(path="/root/data", total_bytes=300, file_count=2, dir_count=0, depth=1),
             ],
+            root="/root",
             timestamp=_dt.datetime(2024, 1, 1, 11, 0, 0, tzinfo=_dt.timezone.utc),
         )
         saved1 = store.save_snapshot(s1)
@@ -64,12 +66,30 @@ class TestComputeDiff:
         for e in diff.entries:
             assert e.growth_bytes >= 200
 
+    def test_different_roots_incomparable(self, store: SnapshotStore) -> None:
+        """Snapshots with different root_path (e.g. full scan vs scoped watch) are incomparable."""
+        s1 = make_snapshot(
+            [DirEntry(path="/", total_bytes=1000, file_count=10, dir_count=2, depth=0)],
+            root="/",
+            timestamp=_dt.datetime(2024, 1, 1, 10, 0, 0, tzinfo=_dt.timezone.utc),
+        )
+        s2 = make_snapshot(
+            [DirEntry(path="/Users/arsene", total_bytes=500, file_count=5, dir_count=0, depth=0)],
+            root="/Users/arsene",
+            timestamp=_dt.datetime(2024, 1, 1, 11, 0, 0, tzinfo=_dt.timezone.utc),
+        )
+        saved1 = store.save_snapshot(s1)
+        saved2 = store.save_snapshot(s2)
+        diff = compute_diff(store, saved1, saved2)
+        assert diff is None
+
 
 class TestConvenienceFunctions:
     def _setup(self, store: SnapshotStore) -> None:
         for i in range(3):
             snap = make_snapshot(
                 [DirEntry(path="/root", total_bytes=100 * (i + 1), file_count=i, dir_count=0, depth=0)],
+                root="/root",
                 timestamp=_dt.datetime(2024, 1, 1 + i, tzinfo=_dt.timezone.utc),
             )
             store.save_snapshot(snap)
@@ -91,7 +111,8 @@ class TestConvenienceFunctions:
 
     def test_latest_diff_not_enough_snapshots(self, store: SnapshotStore) -> None:
         snap = make_snapshot(
-            [DirEntry(path="/root", total_bytes=100, file_count=1, dir_count=0, depth=0)]
+            [DirEntry(path="/root", total_bytes=100, file_count=1, dir_count=0, depth=0)],
+            root="/root",
         )
         store.save_snapshot(snap)
         assert compute_latest_diff(store) is None

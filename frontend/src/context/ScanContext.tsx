@@ -2,30 +2,41 @@ import { createContext, useCallback, useContext, useState } from "react";
 
 export type ScanType = "biggest" | "duplicates" | null;
 
-type ActiveJob = { type: ScanType; jobId: string };
+type ScanJobType = "biggest" | "duplicates";
+
+type ActiveJobs = Record<ScanJobType, string | null>;
 
 type ScanContextValue = {
-  activeJob: ActiveJob | null;
-  setActiveJob: (job: ActiveJob | null) => void;
-  isOtherScanning: (type: ScanType) => boolean;
+  activeJobs: ActiveJobs;
+  setActiveJob: (type: ScanJobType, jobId: string | null) => void;
+  isScanTypeActive: (type: ScanJobType) => boolean;
+  getActiveJob: (type: ScanJobType) => string | null;
 };
 
 const ScanContext = createContext<ScanContextValue | null>(null);
 
 export function ScanProvider({ children }: { children: React.ReactNode }) {
-  const [activeJob, setActiveJobState] = useState<ActiveJob | null>(null);
+  const [activeJobs, setActiveJobsState] = useState<ActiveJobs>({
+    biggest: null,
+    duplicates: null,
+  });
 
-  const setActiveJob = useCallback((job: ActiveJob | null) => {
-    setActiveJobState(job);
+  const setActiveJob = useCallback((type: ScanJobType, jobId: string | null) => {
+    setActiveJobsState((prev) => ({ ...prev, [type]: jobId }));
   }, []);
 
-  const isOtherScanning = useCallback(
-    (type: ScanType) => activeJob !== null && activeJob.type !== type,
-    [activeJob]
+  const isScanTypeActive = useCallback(
+    (type: ScanJobType) => activeJobs[type] !== null,
+    [activeJobs]
+  );
+
+  const getActiveJob = useCallback(
+    (type: ScanJobType) => activeJobs[type],
+    [activeJobs]
   );
 
   return (
-    <ScanContext.Provider value={{ activeJob, setActiveJob, isOtherScanning }}>
+    <ScanContext.Provider value={{ activeJobs, setActiveJob, isScanTypeActive, getActiveJob }}>
       {children}
     </ScanContext.Provider>
   );

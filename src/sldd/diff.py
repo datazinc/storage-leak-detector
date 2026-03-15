@@ -16,6 +16,13 @@ def _scan_depths_compatible(old_snap: Snapshot, new_snap: Snapshot) -> bool:
     return a == b
 
 
+def _roots_compatible(old_snap: Snapshot, new_snap: Snapshot) -> bool:
+    """Only compare snapshots with the same root_path.
+    Scoped watches (e.g. /Users/arsene) don't capture data for other paths;
+    comparing with full scans would show fake zeros or misleading growth."""
+    return old_snap.root_path == new_snap.root_path
+
+
 def compute_diff(
     store: SnapshotStore,
     old_snap: Snapshot,
@@ -32,6 +39,8 @@ def compute_diff(
 
     if not _scan_depths_compatible(old_snap, new_snap):
         return None
+    if not _roots_compatible(old_snap, new_snap):
+        return None  # different watch roots — incomparable (would show fake zeros)
 
     elapsed = (new_snap.timestamp - old_snap.timestamp).total_seconds()
     if elapsed <= 0:

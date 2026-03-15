@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
-import { BrowserRouter, Routes, Route, NavLink } from "react-router-dom";
+import { Component, useCallback, useEffect, useState } from "react";
+import { BrowserRouter, Routes, Route, NavLink, Navigate } from "react-router-dom";
 import {
   LayoutDashboard,
   Play,
@@ -21,10 +21,35 @@ import { Duplicates } from "./views/Duplicates";
 import { Deletion } from "./views/Deletion";
 import { ProcessIO } from "./views/ProcessIO";
 import { SettingsView } from "./views/Settings";
-import { ToastContainer, ConnectionBanner, toast } from "./components/Toast";
+import { ToastContainer, ConnectionBanner, AdminBanner, AdminSuggestionBanner, toast } from "./components/Toast";
 import { CorruptionBanner } from "./components/CorruptionBanner";
 import { api, onConnectionChange } from "./api";
 import { ScanProvider } from "./context/ScanContext";
+import { AddToDeletionProvider } from "./context/AddToDeletionContext";
+
+class RouteErrorBoundary extends Component<
+  { children: React.ReactNode; path: string },
+  { error: Error | null }
+> {
+  state = { error: null as Error | null };
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+  componentDidCatch(error: Error, info: React.ErrorInfo) {
+    console.error("[sldd:nav] RouteErrorBoundary caught:", error, info);
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="p-6 text-red-400">
+          <p className="font-medium">Something went wrong on this page.</p>
+          <p className="text-sm text-slate-500 mt-1 font-mono">{this.state.error.message}</p>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 const NAV = [
   { to: "/", icon: LayoutDashboard, label: "Dashboard" },
@@ -54,6 +79,15 @@ function DbFooter() {
     const id = setInterval(fetchSize, 15000);
     return () => clearInterval(id);
   }, [fetchSize]);
+
+  useEffect(() => {
+    if (!showConfirm) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setShowConfirm(false);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [showConfirm]);
 
   const doReset = async () => {
     setResetting(true);
@@ -128,8 +162,103 @@ function DbFooter() {
   );
 }
 
+function MainContent() {
+  return (
+    <main className="flex-1 overflow-auto">
+      <Routes>
+        <Route path="/" element={<RouteErrorBoundary path="/"><Dashboard /></RouteErrorBoundary>} />
+        <Route path="/playback" element={<RouteErrorBoundary path="/playback"><Playback /></RouteErrorBoundary>} />
+        <Route path="/explorer" element={<RouteErrorBoundary path="/explorer"><Explorer /></RouteErrorBoundary>} />
+        <Route path="/biggest" element={<RouteErrorBoundary path="/biggest"><BiggestFiles /></RouteErrorBoundary>} />
+        <Route path="/duplicates" element={<RouteErrorBoundary path="/duplicates"><Duplicates /></RouteErrorBoundary>} />
+        <Route path="/deletion" element={<RouteErrorBoundary path="/deletion"><Deletion /></RouteErrorBoundary>} />
+        <Route path="/process-io" element={<RouteErrorBoundary path="/process-io"><ProcessIO /></RouteErrorBoundary>} />
+        <Route path="/settings" element={<RouteErrorBoundary path="/settings"><SettingsView /></RouteErrorBoundary>} />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </main>
+  );
+}
+
+const ADMIN_HINT_CLOSED_KEY = "sldd:admin-hint-closed";
+
 export default function App() {
   const [connected, setConnected] = useState(true);
+  const [runningAsRoot, setRunningAsRoot] = useState(false);
+  const [canRestartAsUser, setCanRestartAsUser] = useState(false);
+  const [restartingAsUser, setRestartingAsUser] = useState(false);
+  const [isWindows, setIsWindows] = useState(false);
+  const [canRestartAsAdmin, setCanRestartAsAdmin] = useState(false);
+  const [restartingAsAdmin, setRestartingAsAdmin] = useState(false);
+  const [adminHintClosed, setAdminHintClosed] = useState(() =>
+    typeof localStorage !== "undefined" && localStorage.getItem(ADMIN_HINT_CLOSED_KEY) === "1"
+  );
+
+  useEffect(() => {
+    api.runningAsRoot().then((r) => setRunningAsRoot(r.running_as_root)).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (runningAsRoot) {
+      api.canRestartAsRegularUser().then((r) => {
+        setCanRestartAsUser(r.can_restart);
+        setIsWindows(r.reason === "Windows");
+      }).catch(() => {});
+      setCanRestartAsAdmin(false);
+    } else {
+      setCanRestartAsUser(false);
+      api.canRestartAsAdministrator().then((r) => setCanRestartAsAdmin(r.can_restart)).catch(() => {});
+    }
+  }, [runningAsRoot]);
+
+  const handleRestartAsUser = useCallback(async () => {
+    setRestartingAsUser(true);
+    try {
+      const res = await api.restartAsRegularUser();
+      toast({ type: "success", text: "Restarting as regular user…" });
+      const newUrl = res?.url;
+      const delay = 4000; // server starts after ~3s
+      if (newUrl) {
+        setTimeout(() => (window.location.href = newUrl), delay);
+      } else {
+        setTimeout(() => window.location.reload(), delay);
+      }
+    } catch (err: any) {
+      toast({
+        type: "error",
+        text: `${err?.message ?? "Restart failed"}. Close the app and run sldd web as a regular user.`,
+        timeout: 8000,
+      });
+      setRestartingAsUser(false);
+    }
+  }, []);
+
+  const handleRestartAsAdmin = useCallback(async () => {
+    setRestartingAsAdmin(true);
+    try {
+      const res = await api.restartAsAdministrator();
+      toast({ type: "success", text: "Restarting with administrator privileges…" });
+      const newUrl = res?.url;
+      const delay = 4000;
+      if (newUrl) {
+        setTimeout(() => (window.location.href = newUrl), delay);
+      } else {
+        setTimeout(() => window.location.reload(), delay);
+      }
+    } catch (err: any) {
+      toast({
+        type: "error",
+        text: `${err?.message ?? "Restart failed"}. Run sldd web as administrator manually.`,
+        timeout: 8000,
+      });
+      setRestartingAsAdmin(false);
+    }
+  }, []);
+
+  const closeAdminHint = useCallback(() => {
+    setAdminHintClosed(true);
+    localStorage.setItem(ADMIN_HINT_CLOSED_KEY, "1");
+  }, []);
 
   useEffect(() => {
     const unsub = onConnectionChange(setConnected);
@@ -151,10 +280,27 @@ export default function App() {
 
   return (
     <ScanProvider>
+    <AddToDeletionProvider>
     <BrowserRouter>
       <ToastContainer />
       <CorruptionBanner />
       <div className="flex flex-col h-screen overflow-hidden">
+        {!isWindows && (
+          <AdminBanner
+            runningAsRoot={runningAsRoot}
+            canRestart={canRestartAsUser}
+            onRestartAsUser={handleRestartAsUser}
+            restarting={restartingAsUser}
+          />
+        )}
+        <AdminSuggestionBanner
+          runningAsRoot={runningAsRoot}
+          closed={adminHintClosed}
+          onClose={closeAdminHint}
+          canRestartAsAdmin={canRestartAsAdmin}
+          onRestartAsAdmin={handleRestartAsAdmin}
+          restartingAsAdmin={restartingAsAdmin}
+        />
         <ConnectionBanner connected={connected} />
         <div className="flex flex-1 overflow-hidden">
           <aside className="w-56 shrink-0 bg-slate-900 border-r border-slate-800 flex flex-col">
@@ -188,21 +334,11 @@ export default function App() {
             <DbFooter />
           </aside>
 
-          <main className="flex-1 overflow-auto">
-            <Routes>
-              <Route path="/" element={<Dashboard />} />
-              <Route path="/playback" element={<Playback />} />
-              <Route path="/explorer" element={<Explorer />} />
-              <Route path="/biggest" element={<BiggestFiles />} />
-              <Route path="/duplicates" element={<Duplicates />} />
-              <Route path="/deletion" element={<Deletion />} />
-              <Route path="/process-io" element={<ProcessIO />} />
-              <Route path="/settings" element={<SettingsView />} />
-            </Routes>
-          </main>
+          <MainContent />
         </div>
       </div>
     </BrowserRouter>
+    </AddToDeletionProvider>
     </ScanProvider>
   );
 }
