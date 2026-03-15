@@ -1410,7 +1410,7 @@ def _register_routes(app: FastAPI) -> None:
             except Exception:
                 raise HTTPException(400, "Cannot detect admin status")
             env_lines = "\n".join(f'$env:{k} = "{str(v).replace(chr(34), "")}"' for k, v in env_vars)
-            cmd_invoke = " ".join(f'"{str(c).replace(chr(34), "`"")}"' for c in cmd)
+            cmd_invoke = " ".join(f'"{str(c).replace(chr(34), chr(96) + chr(34))}"' for c in cmd)
             ps_content = f"{env_lines}\n& {cmd_invoke}\n"
             with tempfile.NamedTemporaryFile(mode="w", suffix=".ps1", delete=False, encoding="utf-8") as f:
                 f.write(ps_content)

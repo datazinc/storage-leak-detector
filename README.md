@@ -20,51 +20,90 @@ Cross-platform tool that finds what's eating your disk space by taking filesyste
 
 ## Installation
 
-**From source**:
+### Quick start (clone, install, run — one command)
+
+[**→ Open in GitHub**](https://github.com/datazinc/storage-leak-detector) | [**→ Download ZIP**](https://github.com/datazinc/storage-leak-detector/archive/refs/heads/main.zip)
+
+**Bash** (Linux, macOS, Git Bash):
 
 ```bash
-git clone <repo-url> && cd storage-leaks-diff-detector
-pip install ".[web]"
+([ -d storage-leak-detector ] || git clone https://github.com/datazinc/storage-leak-detector.git) && cd storage-leak-detector && pip install ".[web]" --no-warn-script-location && python -m sldd.cli web
 ```
 
-For development (tests, lint):
+**Windows cmd**:
+
+```cmd
+if not exist storage-leak-detector git clone https://github.com/datazinc/storage-leak-detector.git && cd storage-leak-detector && pip install ".[web]" --no-warn-script-location && python -m sldd.cli web
+```
+
+**Windows PowerShell**:
+
+```powershell
+if (-not (Test-Path storage-leak-detector)) { git clone https://github.com/datazinc/storage-leak-detector.git }; cd storage-leak-detector; pip install ".[web]" --no-warn-script-location; python -m sldd.cli web
+```
+
+Skips cloning if the directory already exists. Uses `python -m` so it works without PATH setup.
+
+### Other options
+
+**Install only** (no run):
 
 ```bash
-pip install -e ".[dev,web]"
+# Bash
+([ -d storage-leak-detector ] || git clone https://github.com/datazinc/storage-leak-detector.git) && cd storage-leak-detector && pip install ".[web]" --no-warn-script-location
+
+# Windows cmd
+if not exist storage-leak-detector git clone https://github.com/datazinc/storage-leak-detector.git && cd storage-leak-detector && pip install ".[web]" --no-warn-script-location
 ```
 
 **From PyPI** (when published): `pip install sldd[web]`
 
-Verify:
+**Development:** `pip install -e ".[dev,web]"`
+
+### Verify
 
 ```bash
 sldd --help
 ```
 
+If `sldd` is not found, use `python -m sldd.cli --help` instead.
+
+### PATH setup
+
+To use `sldd` instead of `python -m sldd.cli`:
+
+**Windows:** Add `Python\Scripts` to PATH (e.g. `C:\Users\<you>\AppData\Local\Programs\Python\Python311\Scripts`). Restart the terminal.
+
+**macOS / Linux:** Add the pip user bin or venv bin to PATH. Restart the terminal or run `source ~/.bashrc` / `source ~/.zshrc`.
+
+**Check:** `which sldd` (macOS/Linux) or `where sldd` (Windows)
+
 ## Platform support
 
-| Feature | Linux | macOS | Windows |
-|---------|:-----:|:-----:|:-------:|
-| Snapshot, diff, watch, drill, history | ✓ | ✓ | ✓ |
-| Duplicate file detection | ✓ | ✓ | ✓ |
-| Web dashboard | ✓ | ✓ | ✓ |
-| Open in file manager | ✓ (xdg-open) | ✓ (Finder) | ✓ (Explorer) |
-| Process I/O (open files, read/write bytes) | ✓ | Partial (I/O bytes often 0) | ✓ |
-| Port fallback when in use | ✓ | ✓ | ✓ |
-| Kill previous sldd on port before start | ✓ (lsof) | ✓ (lsof) | ✓ (psutil) |
-| Graceful SIGINT/SIGTERM (kill child on Ctrl-C) | ✓ | ✓ | ✓ |
-| Run as root detection | ✓ | ✓ | ✓ |
-| Restart as regular user (sudo → drop privileges) | ✓ | ✓ | — |
-| Restart as administrator (elevate when not admin) | ✓ (pkexec) | ✓ (osascript) | ✓ (UAC) |
-| Symlink following | ✓ | ✓ | Partial (may need admin) |
+| Feature                                           |    Linux     |            macOS            |         Windows          |
+| ------------------------------------------------- | :----------: | :-------------------------: | :----------------------: |
+| Snapshot, diff, watch, drill, history             |      ✓       |              ✓              |            ✓             |
+| Duplicate file detection                          |      ✓       |              ✓              |            ✓             |
+| Web dashboard                                     |      ✓       |              ✓              |            ✓             |
+| Open in file manager                              | ✓ (xdg-open) |         ✓ (Finder)          |       ✓ (Explorer)       |
+| Process I/O (open files, read/write bytes)        |      ✓       | Partial (I/O bytes often 0) |            ✓             |
+| Port fallback when in use                         |      ✓       |              ✓              |            ✓             |
+| Kill previous sldd on port before start           |   ✓ (lsof)   |          ✓ (lsof)           |        ✓ (psutil)        |
+| Graceful SIGINT/SIGTERM (kill child on Ctrl-C)    |      ✓       |              ✓              |            ✓             |
+| Run as root detection                             |      ✓       |              ✓              |            ✓             |
+| Restart as regular user (sudo → drop privileges)  |      ✓       |              ✓              |            —             |
+| Restart as administrator (elevate when not admin) |  ✓ (pkexec)  |        ✓ (osascript)        |         ✓ (UAC)          |
+| Symlink following                                 |      ✓       |              ✓              | Partial (may need admin) |
 
-## Quick Start
+## Usage
 
-### Web dashboard (one command)
+### Web dashboard
 
 ```bash
 sldd web
 ```
+
+Try `sldd` first; if not found, use `python -m sldd.cli web`.
 
 First run will:
 
@@ -81,6 +120,8 @@ If Node.js is not installed, you'll see instructions to install it. The CLI (sna
 sldd watch -r / -i 300
 ```
 
+(Or `python -m sldd.cli watch -r / -i 300` if `sldd` is not found.)
+
 Scans `/` every 5 minutes with adaptive mode on by default. Prints a report whenever anomalies are detected. Press Ctrl-C to stop.
 
 ### Web dashboard options
@@ -88,6 +129,8 @@ Scans `/` every 5 minutes with adaptive mode on by default. Prints a report when
 ```bash
 sldd web --port 8080 --db snapshots.db
 ```
+
+(Or `python -m sldd.cli web ...` if `sldd` is not found.)
 
 The dashboard includes:
 
@@ -128,6 +171,8 @@ sldd diff --json --db snapshots.db
 ```
 
 ## CLI Reference
+
+Use `python -m sldd.cli` instead of `sldd` if the command is not found.
 
 | Command                 | Description                               |
 | ----------------------- | ----------------------------------------- |
@@ -231,13 +276,13 @@ cd frontend && npx tsc --noEmit
 
 ## Distribution
 
-| Method | Use case |
-|--------|----------|
-| `pip install sldd[web]` | Standard install from PyPI |
-| `pip install sldd` | CLI only (no web dashboard) |
-| Source + `pip install -e ".[dev,web]"` | Development, contributions |
-| PyInstaller / Nuitka | Standalone executable (no Python/Node required) — build scripts TBD |
-| Docker | Isolated environment — Dockerfile TBD |
+| Method                                 | Use case                                                            |
+| -------------------------------------- | ------------------------------------------------------------------- |
+| `pip install sldd[web]`                | Standard install from PyPI                                          |
+| `pip install sldd`                     | CLI only (no web dashboard)                                         |
+| Source + `pip install -e ".[dev,web]"` | Development, contributions                                          |
+| PyInstaller / Nuitka                   | Standalone executable (no Python/Node required) — build scripts TBD |
+| Docker                                 | Isolated environment — Dockerfile TBD                               |
 
 ## License
 

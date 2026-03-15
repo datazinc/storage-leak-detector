@@ -3,4 +3,4 @@
 Cross-platform tool for detecting abnormal filesystem growth.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"

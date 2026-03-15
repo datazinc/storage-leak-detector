@@ -661,3 +661,7 @@ def _format_bytes(n: int | float) -> str:
     if abs_n >= 1024:
         return f"{sign}{abs_n / 1024:.1f} KB"
     return f"{sign}{abs_n:.0f} B"
+
+
+if __name__ == "__main__":
+    main()
