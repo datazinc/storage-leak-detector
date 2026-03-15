@@ -16,9 +16,31 @@ Cross-platform tool that finds what's eating your disk space by taking filesyste
 ## Prerequisites
 
 - **Python 3.10+**
-- **Node.js 18+** (only for the web dashboard; CLI works without it)
+- **Node.js 18+** — only when [installing from source](#quick-start-clone-install-run--one-command); not needed for pip install (frontend is bundled)
 
 ## Installation
+
+### Install without building (recommended)
+
+No clone, no Node.js, no build. The frontend is bundled in the package.
+
+**From PyPI** (when published):
+
+```bash
+pip install storage-leak-diff-detector[web]
+```
+
+**From GitHub release** (pre-built wheel):
+
+```bash
+pip install https://github.com/datazinc/storage-leak-detector/releases/download/v0.1.2/storage_leak_diff_detector-0.1.2-py3-none-any.whl
+```
+
+Then run:
+
+```bash
+python -m sldd.cli web
+```
 
 ### Quick start (clone, install, run — one command)
 
@@ -46,7 +68,7 @@ Skips cloning if the directory already exists. Uses `python -m` so it works with
 
 ### Other options
 
-**Install only** (no run):
+**From source** (clone + install; requires Node.js for first-time frontend build):
 
 ```bash
 # Bash
@@ -55,8 +77,6 @@ Skips cloning if the directory already exists. Uses `python -m` so it works with
 # Windows cmd
 if not exist storage-leak-detector git clone https://github.com/datazinc/storage-leak-detector.git && cd storage-leak-detector && pip install ".[web]" --no-warn-script-location
 ```
-
-**From PyPI** (when published): `pip install sldd[web]`
 
 **Development:** `pip install -e ".[dev,web]"`
 
@@ -278,10 +298,12 @@ cd frontend && npx tsc --noEmit
 
 | Method                                 | Use case                                                            |
 | -------------------------------------- | ------------------------------------------------------------------- |
-| `pip install sldd[web]`                | Standard install from PyPI (frontend bundled)                       |
-| `pip install sldd`                     | CLI only (no web dashboard)                                         |
+| `pip install storage-leak-diff-detector[web]`                | PyPI (no build, frontend bundled)                                   |
+| `pip install <wheel URL>`              | GitHub release wheel (no build)                                     |
+| `pip install storage-leak-diff-detector` | CLI only (no web dashboard)                                       |
+| Source + `pip install ".[web]"`        | From clone (requires Node.js for first build)                       |
 | Source + `pip install -e ".[dev,web]"` | Development, contributions                                          |
-| PyInstaller / Nuitka                   | Standalone executable (no Python/Node required) — build scripts TBD |
+| PyInstaller / Nuitka                   | Standalone executable — build scripts TBD                           |
 | Docker                                 | Isolated environment — Dockerfile TBD                               |
 
 **Publishing a release:** Run `cd frontend && npm run build`, then `python scripts/prepare_build.py` to copy the built frontend into the package, then `python -m build`.

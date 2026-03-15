@@ -371,7 +371,7 @@ def web(
     except ImportError:
         console.print(
             "[red]uvicorn not installed. "
-            "Run: pip install 'sldd[web]'[/red]"
+            "Run: pip install 'storage-leak-diff-detector[web]'[/red]"
         )
         sys.exit(1)
 
