@@ -16,67 +16,52 @@ Cross-platform tool that finds what's eating your disk space by taking filesyste
 ## Prerequisites
 
 - **Python 3.10+**
-- **Node.js 18+** — only when [installing from source](#quick-start-clone-install-run--one-command); not needed for pip install (frontend is bundled)
+- **Node.js 18+** — only when [installing from source](#from-source-clone--install--run); not needed for pip install (frontend is bundled)
 
 ## Installation
 
-### Install without building (recommended)
+### Quick start (recommended)
 
-No clone, no Node.js, no build. The frontend is bundled in the package.
+Install from PyPI and run the web dashboard. No clone, no Node.js, no build.
 
-**From PyPI** (when published):
-
-```bash
-pip install storage-leak-diff-detector[web]
-```
-
-**From GitHub release** (pre-built wheel):
+**Bash / cmd / PowerShell 7+**:
 
 ```bash
-pip install https://github.com/datazinc/storage-leak-detector/releases/download/v0.1.2/storage_leak_diff_detector-0.1.2-py3-none-any.whl
+pip install storage-leak-diff-detector[web] && python -m sldd.cli web
 ```
 
-Then run:
+**PowerShell 5** (use `;` instead of `&&`):
 
-```bash
-python -m sldd.cli web
+```powershell
+pip install storage-leak-diff-detector[web]; python -m sldd.cli web
 ```
 
-### Quick start (clone, install, run — one command)
+### From source (clone + install + run)
 
 [**→ Open in GitHub**](https://github.com/datazinc/storage-leak-detector) | [**→ Download ZIP**](https://github.com/datazinc/storage-leak-detector/archive/refs/heads/main.zip)
 
-**Bash** (Linux, macOS, Git Bash):
+Requires Node.js 18+ for the first build. Skips cloning if the directory exists.
 
 ```bash
+# Bash (Linux, macOS, Git Bash)
 ([ -d storage-leak-detector ] || git clone https://github.com/datazinc/storage-leak-detector.git) && cd storage-leak-detector && pip install ".[web]" --no-warn-script-location && python -m sldd.cli web
-```
 
-**Windows cmd**:
-
-```cmd
+# Windows cmd
 if not exist storage-leak-detector git clone https://github.com/datazinc/storage-leak-detector.git && cd storage-leak-detector && pip install ".[web]" --no-warn-script-location && python -m sldd.cli web
-```
 
-**Windows PowerShell**:
-
-```powershell
+# PowerShell
 if (-not (Test-Path storage-leak-detector)) { git clone https://github.com/datazinc/storage-leak-detector.git }; cd storage-leak-detector; pip install ".[web]" --no-warn-script-location; python -m sldd.cli web
 ```
 
-Skips cloning if the directory already exists. Uses `python -m` so it works without PATH setup.
-
 ### Other options
 
-**From source** (clone + install; requires Node.js for first-time frontend build):
+**From GitHub release** (pre-built wheel, no PyPI):
 
 ```bash
-# Bash
-([ -d storage-leak-detector ] || git clone https://github.com/datazinc/storage-leak-detector.git) && cd storage-leak-detector && pip install ".[web]" --no-warn-script-location
-
-# Windows cmd
-if not exist storage-leak-detector git clone https://github.com/datazinc/storage-leak-detector.git && cd storage-leak-detector && pip install ".[web]" --no-warn-script-location
+pip install https://github.com/datazinc/storage-leak-detector/releases/download/v0.1.2/storage_leak_diff_detector-0.1.2-py3-none-any.whl && python -m sldd.cli web
 ```
+
+**CLI only** (no web): `pip install storage-leak-diff-detector`
 
 **Development:** `pip install -e ".[dev,web]"`
 
