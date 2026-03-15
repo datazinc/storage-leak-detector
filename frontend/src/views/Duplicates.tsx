@@ -43,6 +43,7 @@ export function Duplicates() {
   const [pageSize, setPageSize] = useState(20);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const autoStartedRef = useRef(false);
+  const completionToastShownRef = useRef(false);
 
   const stopPolling = useCallback(() => {
     if (pollRef.current) {
@@ -63,10 +64,13 @@ export function Duplicates() {
             const r = await api.scanResult<DuplicatesResult>(jobId);
             setResult(r);
             setExpanded(new Set(r.groups.slice(0, 5).map((g) => g.hash)));
-            toast({
-              type: "success",
-              text: `Found ${r.total_groups} duplicate groups (${r.total_wasted_human} wasted)`,
-            });
+            if (!completionToastShownRef.current) {
+              completionToastShownRef.current = true;
+              toast({
+                type: "success",
+                text: `Found ${r.total_groups} duplicate groups (${r.total_wasted_human} wasted)`,
+              });
+            }
           }
         }
       } catch { /* polling */ }
@@ -79,6 +83,7 @@ export function Duplicates() {
       return;
     }
     stopPolling();
+    completionToastShownRef.current = false;
     setResult(null);
     setSelected(new Set());
     setExpanded(new Set());

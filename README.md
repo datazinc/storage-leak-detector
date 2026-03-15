@@ -58,7 +58,7 @@ if (-not (Test-Path storage-leak-detector)) { git clone https://github.com/dataz
 **From GitHub release** (pre-built wheel, no PyPI):
 
 ```bash
-pip install https://github.com/datazinc/storage-leak-detector/releases/download/v0.1.2/storage_leak_diff_detector-0.1.2-py3-none-any.whl && python -m sldd.cli web
+pip install https://github.com/datazinc/storage-leak-detector/releases/download/v0.1.3/storage_leak_diff_detector-0.1.3-py3-none-any.whl && python -m sldd.cli web
 ```
 
 **CLI only** (no web): `pip install storage-leak-diff-detector`

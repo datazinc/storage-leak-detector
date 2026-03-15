@@ -44,6 +44,7 @@ export function BiggestFiles() {
   const [pageSize, setPageSize] = useState(50);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const autoStartedRef = useRef(false);
+  const completionToastShownRef = useRef(false);
 
   const stopPolling = useCallback(() => {
     if (pollRef.current) {
@@ -63,10 +64,13 @@ export function BiggestFiles() {
           if (!s.error) {
             const result = await api.scanResult<LargeFile[]>(jobId);
             setFiles(result);
-            toast({
-              type: "success",
-              text: `Found ${result.length} files (${s.dirs_scanned.toLocaleString()} dirs, ${s.elapsed_seconds.toFixed(1)}s)`,
-            });
+            if (!completionToastShownRef.current) {
+              completionToastShownRef.current = true;
+              toast({
+                type: "success",
+                text: `Found ${result.length} files (${s.dirs_scanned.toLocaleString()} dirs, ${s.elapsed_seconds.toFixed(1)}s)`,
+              });
+            }
           }
         }
       } catch { /* polling error, ignore */ }
@@ -79,6 +83,7 @@ export function BiggestFiles() {
       return;
     }
     stopPolling();
+    completionToastShownRef.current = false;
     setFiles([]);
     setSelected(new Set());
     setPage(0);
